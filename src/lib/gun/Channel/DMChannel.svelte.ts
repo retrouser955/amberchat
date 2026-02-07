@@ -166,11 +166,6 @@ export class DMChannel {
 		let index = 0;
 		let high = this.messages.length;
 
-		if (index === 0) {
-			this.messages.push(message);
-			return;
-		}
-
 		while (index < high) {
 			let mid = (index + high) >>> 1;
 			if (this.messages[mid].timestamp < message.timestamp) index = mid + 1;

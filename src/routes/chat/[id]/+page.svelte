@@ -53,7 +53,7 @@
 	<p class="ml-3 text-neutral-400">{userData?.alias}</p>
 </div>
 <div class="h-[calc(100%-2.5rem)] w-full">
-	<div class="h-[calc(100%-5rem)] w-full">
+	<div class="h-[calc(100%-5rem)] w-full overflow-auto">
 		{#each dm.messages as message}
 			<Message
 				alias={message.author.alias}
