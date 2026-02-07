@@ -12,10 +12,14 @@
 		user.get<Record<string, string>>("friends").map().once(async (_, k) => {
 			await navigator.locks.request("CHAT_FRIENDS_SIDEBAR", async () => {
 				if(friends.find((v) => v.pub === k)) return;
+				
+				const peer = await gun.get<{ alias: string, avatar?: string }>(`~${k}`).then();
+
+				if(!peer) return;
 
 				friends.push({
-					alias: await gun.get(`~${k}`).get("alias").then(),
-					avatar: await gun.get(`~${k}`).get("avatar").then(),
+					alias: peer.alias,
+					avatar: peer.avatar,
 					pub: k
 				})
 			})

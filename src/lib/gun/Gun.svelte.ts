@@ -1,4 +1,4 @@
-import Gun, { type IGunInstance, type ISEA, type ISEAPair } from "gun";
+import Gun, { type IGunInstance, type ISEAPair } from "gun";
 import 'gun/lib/radix';
 import 'gun/lib/radisk';
 import 'gun/lib/store';
