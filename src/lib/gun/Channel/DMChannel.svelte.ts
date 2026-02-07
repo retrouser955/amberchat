@@ -72,7 +72,7 @@ export class DMChannel {
 
 	loadHistory() {
 		return new Promise((resolve, reject) => {
-			if (!this.lastMessage) throw new Error("fetch normal first");
+			if (!this.lastMessage) return reject("fetch normal first");
 			const match: LEXQuery & { "%": number } = {
 				".": {
 					"-": 1,
