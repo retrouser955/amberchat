@@ -23,6 +23,8 @@ export interface MessageFormatted {
 	timestamp: number;
 }
 
+export type GunCallback = (data: string | undefined, key: string) => unknown;
+
 /**
  * Let's structure the Message sytem as follows
  * We can store message IDs in the frozen space tied to the user.
@@ -42,6 +44,7 @@ export class DMChannel {
 	messages = $state<MessageFormatted[]>([]);
 	lastMessage?: number;
 	currentMessagesCache: string[] = [];
+	private container?: HTMLDivElement;
 
 	constructor(peerPub: string) {
 		this.peer = peerPub;
@@ -67,9 +70,145 @@ export class DMChannel {
 		return user;
 	}
 
+	loadHistory() {
+		return new Promise((resolve, reject) => {
+			if (!this.lastMessage) throw new Error("fetch normal first");
+			const match: LEXQuery & { "%": number } = {
+				".": {
+					"-": 1,
+					"<": this.lastMessage + "",
+				},
+				"%": 100,
+			};
+
+			const gun = createGun();
+
+			const messages: MessageFormatted[] = []
+
+			const off = gun
+				.get("#chats/DMs/" + this.channelId)
+				.get(match)
+				.map()
+				.once(this.createGunCallback(true, messages)).off;
+
+			setTimeout(() => {
+				try {
+					off();
+					resolve(messages);
+				} catch (err) {
+					reject(err);
+				}
+			}, 300)
+		});
+	}
+
+	private createGunCallback(isLoadingOldMessage: false): GunCallback;
+	private createGunCallback(
+		isLoadingOldMessage: true,
+		messageArray: MessageFormatted[],
+	): GunCallback;
+	private createGunCallback(
+		isLoadingOldMessage: boolean,
+		messageArray?: MessageFormatted[],
+	): GunCallback {
+		return async (data: string | undefined, key: string) => {
+			if (!data || typeof data !== "string") return;
+			if (!this.peerEnc) return;
+			if (this.currentMessagesCache.includes(key)) return;
+
+			let jsonData: MessageFrozen | null = null;
+
+			try {
+				const jsonFormatted: Partial<MessageFrozen> = JSON.parse(data);
+
+				if (!jsonFormatted.from || !jsonFormatted.sig) jsonData = null;
+				else jsonData = jsonFormatted as MessageFrozen;
+			} catch {
+				jsonData = null;
+			}
+
+			if (!jsonData) return;
+
+			// verify the signature
+			const sig = await SEA.verify(jsonData.sig, jsonData.from);
+
+			if (!sig || sig !== "SIGNED_MESSAGE") return;
+			const messageId = parseInt(key.split("#")[0]);
+
+			this.currentMessagesCache.push(key);
+
+			const gun = createGun();
+
+			const message = (await gun
+				.get(`~${jsonData.from}`)
+				.get("messages")
+				.get(this.channelId)
+				.get(messageId + "")
+				.then()) as Partial<MessageRaw> | undefined;
+
+			if (!message || !message.content) return;
+
+			const msg = message as MessageRaw;
+
+			const user = this.getUser();
+
+			const secret = await SEA.secret(this.peerEnc, user._.sea);
+
+			if (!secret) {
+				console.log(
+					"Erroring during decryption. Message " + key + " not rendered",
+					SEA.err,
+				);
+				return;
+			}
+
+			const content = await SEA.decrypt<string | undefined>(msg.content, {
+				epriv: secret,
+			});
+
+			if (!content) {
+				console.log("Error during decryption", SEA.err);
+				return;
+			}
+
+			const messageFormatted: MessageFormatted = {
+				content,
+				author: {
+					alias: await gun.get(`~${jsonData.from}`).get("alias").then(),
+					avatar: await gun.get(`~${jsonData.from}`).get("avatar").then(),
+					pub: jsonData.from,
+				},
+				timestamp: messageId,
+			};
+
+			if (!isLoadingOldMessage) {
+				navigator.locks.request("GUNDB_MESSAGE_POP", () => {
+					if (
+						!this.lastMessage ||
+						this.lastMessage > messageFormatted.timestamp
+					) {
+						this.lastMessage = messageFormatted.timestamp;
+					}
+					this.insertAtSortIndex(messageFormatted);
+				});
+			} else {
+				navigator.locks.request("GUNDB_MESSAGE_ARRAY", () => {
+					if (
+						!this.lastMessage ||
+						this.lastMessage > messageFormatted.timestamp
+					) {
+						this.lastMessage = messageFormatted.timestamp;
+					}
+					const index = this.getSortIndex(messageFormatted, messageArray!);
+
+					messageArray!.splice(index, 0, messageFormatted);
+				})
+			}
+		};
+	}
+
 	listen() {
 		const gun = createGun();
-		const user = this.getUser();
 		const match: LEXQuery & { "%": number } = {
 			".": {
 				"-": 1,
@@ -82,97 +221,35 @@ export class DMChannel {
 			.get("#chats/DMs/" + this.channelId)
 			.get(match)
 			.map()
-			.once(async (data: string | undefined, key) => {
-				if (!data || typeof data !== "string") return;
-				if (!this.peerEnc) return;
-				if (this.currentMessagesCache.includes(key)) return;
-
-				let jsonData: MessageFrozen | null = null;
-
-				try {
-					const jsonFormatted: Partial<MessageFrozen> = JSON.parse(data);
-
-					if (!jsonFormatted.from || !jsonFormatted.sig) jsonData = null;
-					else jsonData = jsonFormatted as MessageFrozen;
-				} catch {
-					jsonData = null;
-				}
-
-				if (!jsonData) return;
-
-				// verify the signature
-				const sig = await SEA.verify(jsonData.sig, jsonData.from);
-
-				if (!sig || sig !== "SIGNED_MESSAGE") return;
-				const messageId = parseInt(key.split("#")[0]);
-
-				this.currentMessagesCache.push(key);
-
-				const message = (await gun
-					.get(`~${jsonData.from}`)
-					.get("messages")
-					.get(this.channelId)
-					.get(messageId + "")
-					.then()) as Partial<MessageRaw> | undefined;
-
-				if (!message || !message.content) return;
-
-				const msg = message as MessageRaw;
-
-				const secret = await SEA.secret(this.peerEnc, user._.sea);
-
-				if (!secret) {
-					console.log(
-						"Erroring during decryption. Message " + key + " not rendered",
-						SEA.err,
-					);
-					return;
-				}
-
-				const content = await SEA.decrypt<string | undefined>(msg.content, {
-					epriv: secret,
-				});
-
-				if (!content) {
-					console.log("Error during decryption", SEA.err);
-					return;
-				}
-
-				const messageFormatted: MessageFormatted = {
-					content,
-					author: {
-						alias: await gun.get(`~${jsonData.from}`).get("alias").then(),
-						avatar: await gun.get(`~${jsonData.from}`).get("avatar").then(),
-						pub: jsonData.from,
-					},
-					timestamp: messageId,
-				};
-
-				navigator.locks.request("GUNDB_MESSAGE_POP", () => {
-					if (
-						!this.lastMessage ||
-						this.lastMessage > messageFormatted.timestamp
-					) {
-						this.lastMessage = messageFormatted.timestamp;
-					}
-					this.insertAtSortIndex(messageFormatted);
-				});
-			}) as unknown as Function;
+			.once(this.createGunCallback(false)).off;
 
 		return off;
 	}
 
 	private insertAtSortIndex(message: MessageFormatted) {
+		const index = this.getSortIndex(message, this.messages);
+
+		this.messages.splice(index, 0, message);
+	}
+
+	private getSortIndex(
+		message: MessageFormatted,
+		messages: MessageFormatted[],
+	) {
 		let index = 0;
-		let high = this.messages.length;
+		let high = messages.length;
 
 		while (index < high) {
 			let mid = (index + high) >>> 1;
-			if (this.messages[mid].timestamp < message.timestamp) index = mid + 1;
+			if (messages[mid].timestamp < message.timestamp) index = mid + 1;
 			else high = mid;
 		}
 
-		this.messages.splice(index, 0, message);
+		return index;
+	}
+
+	setScrollContainer(container: HTMLDivElement) {
+		this.container = container;
 	}
 
 	async send(content: string) {

@@ -16,6 +16,16 @@
 	}>();
 
 	let dm = new DMChannel(uid);
+	let container: HTMLDivElement;
+
+	$effect(() => {
+		if(dm.messages.length === 0) return;
+		const lastChild = container.children[container.children.length - 1];
+		
+		lastChild.scrollIntoView({
+			behavior: "smooth"
+		})
+	})
 
 	onMount(() => {
 		const gun = createGun();
@@ -53,7 +63,7 @@
 	<p class="ml-3 text-neutral-400">{userData?.alias}</p>
 </div>
 <div class="h-[calc(100%-2.5rem)] w-full">
-	<div class="h-[calc(100%-5rem)] w-full overflow-auto">
+	<div class="h-[calc(100%-5rem)] w-full overflow-auto" bind:this={container}>
 		{#each dm.messages as message}
 			<Message
 				alias={message.author.alias}
@@ -68,7 +78,7 @@
 		<Input class="h-full w-full border-none" type="text" bind:value={messageContent} onkeydown={async (e) => {
 			if(e.key === "Enter" && document.activeElement === e.target) {
 				if(!messageContent || messageContent.trim() === "") return;
-				console.log(messageContent)
+
 				try {
 					await dm.send(messageContent)
 					messageContent = "";
