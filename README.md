@@ -59,6 +59,19 @@ PUBLIC_GUN_RELAY=https://relay-one.example.com/gun,https://relay-two.example.com
 
 If `PUBLIC_GUN_RELAY` is not set, the app defaults to `http://localhost:3000/gun`.
 
+## Deploying the frontend
+
+The SvelteKit app can be deployed to Vercel. Set `PUBLIC_GUN_RELAY` in the
+Vercel project's environment variables, for example:
+
+```bash
+PUBLIC_GUN_RELAY=https://amber-relay.onrender.com/gun
+```
+
+The relay is deployed separately (see `relay/README.md` and `render.yaml`).
+When running on Vercel, `svelte.config.js` selects `@sveltejs/adapter-vercel`
+automatically.
+
 ## Voice and video calls
 
 Calls use WebRTC for media and Gun for signaling. Offer, answer, and ICE-candidate

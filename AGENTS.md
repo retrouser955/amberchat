@@ -30,7 +30,8 @@ A Gun relay must be running for real messaging. `src/lib/gun/Gun.svelte.ts` read
 
 Deployment notes:
 - `svelte.config.js` selects `@sveltejs/adapter-vercel` when `VERCEL` is set, and `adapter-auto` otherwise. On Windows, `adapter-vercel` needs Developer Mode for its function symlinks.
-- `vite.config.ts` sets `ssr.noExternal: ['gun']`. Gun is CommonJS; leaving it external makes the Vercel function import it through Node's ESM loader and crash with `ERR_INTERNAL_ASSERTION` (the 500 page).
+- `vite.config.ts` sets `ssr.noExternal: ['gun']` only for the Vercel production build (`command === 'build'` and `VERCEL` set). Gun is CommonJS; leaving it external makes the Vercel function import it through Node's ESM loader and crash with `ERR_INTERNAL_ASSERTION` (the 500 page). Do not apply this in dev: Vite's SSR module runner has no `module` global and fails with `module is not defined`.
+- The project uses Yarn 4 (`yarn.lock` v8 + `.yarnrc.yml` with `nodeLinker: node-modules`).
 - Set `PUBLIC_GUN_RELAY` in the Vercel project environment, pointing at the separately deployed relay (`.../gun`).
 
 ## Layout
