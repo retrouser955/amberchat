@@ -13,7 +13,14 @@
 	})
 </script>
 
-<svelte:head><link rel="icon" href={favicon} /></svelte:head>
+<svelte:head>
+	<link rel="icon" href={favicon} />
+	<title>AmberChat</title>
+	<meta
+		name="description"
+		content="Amber is a decentralized chat app powered by GunDB"
+	/>
+</svelte:head>
 
 <div class="flex h-dvh w-full flex-col overflow-hidden bg-app">
 	<Navbar />
