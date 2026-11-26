@@ -24,3 +24,7 @@ vite.config.ts.timestamp-*
 
 # Relay
 /relay/radata
+
+# Yarn 4
+.yarn/
+.pnp.*

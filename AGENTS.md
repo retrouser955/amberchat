@@ -7,7 +7,7 @@ AmberChat is a peer-to-peer messaging app built with SvelteKit and GunDB. Messag
 ## Stack
 
 - SvelteKit 2 + Svelte 5 (runes: `$state`, `$props`, `$effect`, `$bindable`)
-- TypeScript (strict), Vite 7, `@sveltejs/adapter-auto`
+- TypeScript (strict), Vite 7, `@sveltejs/adapter-auto` locally and `@sveltejs/adapter-vercel` on Vercel
 - Tailwind CSS v4 (`src/routes/layout.css`) and shadcn-svelte / bits-ui components
 - GunDB (`gun`, `gun/sea`, `gun/lib/{radix,radisk,store,rindexed}`), `gun-avatar`
 - `moment` for relative timestamps, `lucide-svelte` for icons
@@ -27,6 +27,11 @@ yarn check:watch      # same, in watch mode
 There are no tests, linter, or `format` scripts. Prettier config is `{ "useTabs": true }`; `.vscode/settings.json` enforces tabs and disables indentation detection. Match tabs in all source files.
 
 A Gun relay must be running for real messaging. `src/lib/gun/Gun.svelte.ts` reads `PUBLIC_GUN_RELAY` (`$env/dynamic/public`), a comma-separated peer list, and defaults to `http://localhost:3000/gun`. Copy `.env.example` to `.env` to configure it. The README shows a minimal Express + Gun relay (`app.use(Gun.serve)`, `Gun({ web: httpServer })` on port 3000).
+
+Deployment notes:
+- `svelte.config.js` selects `@sveltejs/adapter-vercel` when `VERCEL` is set, and `adapter-auto` otherwise. On Windows, `adapter-vercel` needs Developer Mode for its function symlinks.
+- `vite.config.ts` sets `ssr.noExternal: ['gun']`. Gun is CommonJS; leaving it external makes the Vercel function import it through Node's ESM loader and crash with `ERR_INTERNAL_ASSERTION` (the 500 page).
+- Set `PUBLIC_GUN_RELAY` in the Vercel project environment, pointing at the separately deployed relay (`.../gun`).
 
 ## Layout
 
