@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { gunAvatar } from "gun-avatar";
+	import { page } from "$app/state";
+	import GunAvatar from "../GunAvatar/GunAvatar.svelte";
+	import { cn } from "$lib/utils";
 
 	const {
 		avatar,
@@ -10,17 +12,21 @@
 		pub: string,
 		alias: string,
 	} = $props()
+
+	const active = $derived(page.url.pathname === `/chat/${pub}`);
 </script>
 
-<a class="w-full h-14 flex cursor-pointer p-1 rounded-lg justify-start items-center hover:bg-neutral-900 transition-colors" href={`/chat/${pub}`}>
-	<img
-		src={
-			avatar
-			// @ts-expect-error
-			|| gunAvatar({ pub, size: 200 })
-		}
-		alt={`${alias}'s' avatar`}
-		class="h-12 rounded-full"
-	>
-	<p class="ml-2 text-lg text-neutral-200">{alias}</p>
+<a
+	href={`/chat/${pub}`}
+	title={alias}
+	aria-current={active ? "page" : undefined}
+	class={cn(
+		"group flex items-center gap-2.5 rounded-md px-2 py-1.5 transition-colors max-md:justify-center",
+		active
+			? "bg-selected text-ink"
+			: "text-ink-muted hover:bg-hover hover:text-ink-soft"
+	)}
+>
+	<GunAvatar pub={pub} avatarSource={avatar} class="h-8 w-8 shrink-0 rounded-full" />
+	<span class="min-w-0 truncate text-sm font-medium max-md:hidden">{alias}</span>
 </a>

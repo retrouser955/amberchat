@@ -1,6 +1,5 @@
 import Gun, { type LEXQuery } from "gun";
 import { createGun, ensureUserLogged, getUser } from "../Gun.svelte";
-import { onMount } from "svelte";
 
 const { SEA } = Gun;
 
@@ -38,20 +37,45 @@ export type GunCallback = (data: string | undefined, key: string) => unknown;
  * and from is pointing to the pub of the userspace where the message is stored so that message cannot be tampered with
  */
 export class DMChannel {
-	channelId!: string;
 	peer: string;
 	peerEnc?: string;
 	messages = $state<MessageFormatted[]>([]);
 	lastMessage?: number;
-	currentMessagesCache: string[] = [];
+	currentMessagesCache = new Set<string>();
+	private pendingMessageKeys = new Set<string>();
+	private channelIdCache?: string;
+	private secretCache?: string;
 	private container?: HTMLDivElement;
 
 	constructor(peerPub: string) {
 		this.peer = peerPub;
-		onMount(() => {
-			const user = this.getUser();
-			this.channelId = [user._.sea.pub, peerPub].sort().join("[DMCHANNEL]");
+	}
+
+	private async getSecret() {
+		if (this.secretCache) return this.secretCache;
+		if (!this.peerEnc) throw new Error("Peer encryption key not loaded");
+
+		const user = this.getUser();
+		const secret = await SEA.secret(this.peerEnc, user._.sea);
+
+		if (!secret) throw new Error("Could not derive the message encryption key");
+
+		this.secretCache = secret;
+		return secret;
+	}
+
+	private async getChannelId() {
+		if (this.channelIdCache) return this.channelIdCache;
+
+		const secret = await this.getSecret();
+		const channelId = await SEA.work(`amber/dm/v1:${secret}`, null, null, {
+			name: "SHA-256"
 		});
+
+		if (!channelId) throw new Error("Could not derive the message channel ID");
+
+		this.channelIdCache = channelId;
+		return channelId;
 	}
 
 	async fetchUserEpub() {
@@ -70,9 +94,11 @@ export class DMChannel {
 		return user;
 	}
 
-	loadHistory() {
-		return new Promise((resolve, reject) => {
-			if (!this.lastMessage) return reject("fetch normal first");
+	async loadHistory() {
+		const channelId = await this.getChannelId();
+
+		return new Promise<MessageFormatted[]>((resolve, reject) => {
+			if (!this.lastMessage) return reject(new Error("Fetch normal messages first"));
 			const match: LEXQuery & { "%": number } = {
 				".": {
 					"-": 1,
@@ -85,15 +111,16 @@ export class DMChannel {
 
 			const messages: MessageFormatted[] = []
 
-			const off = gun
-				.get("#chats/DMs/" + this.channelId)
+			const chain = gun
+				.get("chats/DMs/" + channelId)
 				.get(match)
-				.map()
-				.once(this.createGunCallback(true, messages)).off;
+				.map();
+
+			chain.once(this.createGunCallback(true, messages));
 
 			setTimeout(() => {
 				try {
-					off();
+					chain.off();
 					resolve(messages);
 				} catch (err) {
 					reject(err);
@@ -111,104 +138,127 @@ export class DMChannel {
 		isLoadingOldMessage: boolean,
 		messageArray?: MessageFormatted[],
 	): GunCallback {
-		return async (data: string | undefined, key: string) => {
+		const handle = async (
+			data: string | undefined,
+			key: string,
+			attempt = 0,
+		) => {
 			if (!data || typeof data !== "string") return;
 			if (!this.peerEnc) return;
-			if (this.currentMessagesCache.includes(key)) return;
+			if (this.currentMessagesCache.has(key) || this.pendingMessageKeys.has(key)) return;
 
-			let jsonData: MessageFrozen | null = null;
+			this.pendingMessageKeys.add(key);
 
 			try {
-				const jsonFormatted: Partial<MessageFrozen> = JSON.parse(data);
+				const secret = await this.getSecret();
+				const channelId = await this.getChannelId();
+				let jsonData: MessageFrozen | null = null;
 
-				if (!jsonFormatted.from || !jsonFormatted.sig) jsonData = null;
-				else jsonData = jsonFormatted as MessageFrozen;
-			} catch {
-				jsonData = null;
-			}
+				try {
+					const decrypted = await SEA.decrypt(data, { epriv: secret });
+					const parsed =
+						typeof decrypted === "string" ? JSON.parse(decrypted) : decrypted;
 
-			if (!jsonData) return;
+					if (parsed && typeof parsed === "object") {
+						const jsonFormatted = parsed as Partial<MessageFrozen>;
 
-			// verify the signature
-			const sig = await SEA.verify(jsonData.sig, jsonData.from);
-
-			if (!sig || sig !== "SIGNED_MESSAGE") return;
-			const messageId = parseInt(key.split("#")[0]);
-
-			this.currentMessagesCache.push(key);
-
-			const gun = createGun();
-
-			const message = (await gun
-				.get(`~${jsonData.from}`)
-				.get("messages")
-				.get(this.channelId)
-				.get(messageId + "")
-				.then()) as Partial<MessageRaw> | undefined;
-
-			if (!message || !message.content) return;
-
-			const msg = message as MessageRaw;
-
-			const user = this.getUser();
-
-			const secret = await SEA.secret(this.peerEnc, user._.sea);
-
-			if (!secret) {
-				console.log(
-					"Erroring during decryption. Message " + key + " not rendered",
-					SEA.err,
-				);
-				return;
-			}
-
-			const content = await SEA.decrypt<string | undefined>(msg.content, {
-				epriv: secret,
-			});
-
-			if (!content) {
-				console.log("Error during decryption", SEA.err);
-				return;
-			}
-
-			const messageFormatted: MessageFormatted = {
-				content,
-				author: {
-					alias: await gun.get(`~${jsonData.from}`).get("alias").then(),
-					avatar: await gun.get(`~${jsonData.from}`).get("avatar").then(),
-					pub: jsonData.from,
-				},
-				timestamp: messageId,
-			};
-
-			if (!isLoadingOldMessage) {
-				navigator.locks.request("GUNDB_MESSAGE_POP", () => {
-					if (
-						!this.lastMessage ||
-						this.lastMessage > messageFormatted.timestamp
-					) {
-						this.lastMessage = messageFormatted.timestamp;
+						if (jsonFormatted.from && jsonFormatted.sig) {
+							jsonData = jsonFormatted as MessageFrozen;
+						}
 					}
-					this.insertAtSortIndex(messageFormatted);
+				} catch {
+					jsonData = null;
+				}
+
+				if (!jsonData) return;
+
+				// verify the signature
+				const sig = await SEA.verify(jsonData.sig, jsonData.from);
+
+				if (!sig || sig !== "SIGNED_MESSAGE") return;
+				const messageId = Number(key.split("#")[0]);
+
+				if (!Number.isInteger(messageId)) return;
+
+				const gun = createGun();
+
+				const message = (await gun
+					.get(`~${jsonData.from}`)
+					.get("messages")
+					.get(channelId)
+					.get(messageId + "")
+					.then()) as Partial<MessageRaw> | undefined;
+
+				// The message content may not have synced yet. Do not cache the
+				// index key, and retry a few times before giving up.
+				if (!message || !message.content) {
+					if (!isLoadingOldMessage && attempt < 4) {
+						setTimeout(() => {
+							void handle(data, key, attempt + 1);
+						}, 750);
+					}
+					return;
+				}
+
+				const msg = message as MessageRaw;
+
+				const content = await SEA.decrypt<string | undefined>(msg.content, {
+					epriv: secret,
 				});
-			} else {
-				navigator.locks.request("GUNDB_MESSAGE_ARRAY", () => {
-					if (
-						!this.lastMessage ||
-						this.lastMessage > messageFormatted.timestamp
-					) {
-						this.lastMessage = messageFormatted.timestamp;
-					}
-					const index = this.getSortIndex(messageFormatted, messageArray!);
 
-					messageArray!.splice(index, 0, messageFormatted);
-				})
+				if (!content) {
+					console.log("Error during decryption", SEA.err);
+					return;
+				}
+
+				const messageFormatted: MessageFormatted = {
+					content,
+					author: {
+						alias:
+							(await gun.get(`~${jsonData.from}`).get("alias").then()) ??
+							jsonData.from,
+						avatar: await gun.get(`~${jsonData.from}`).get("avatar").then(),
+						pub: jsonData.from,
+					},
+					timestamp: messageId,
+				};
+
+				this.currentMessagesCache.add(key);
+
+				if (!isLoadingOldMessage) {
+					navigator.locks.request("GUNDB_MESSAGE_POP", () => {
+						if (
+							!this.lastMessage ||
+							this.lastMessage > messageFormatted.timestamp
+						) {
+							this.lastMessage = messageFormatted.timestamp;
+						}
+						this.insertAtSortIndex(messageFormatted);
+					});
+				} else {
+					navigator.locks.request("GUNDB_MESSAGE_ARRAY", () => {
+						if (
+							!this.lastMessage ||
+							this.lastMessage > messageFormatted.timestamp
+						) {
+							this.lastMessage = messageFormatted.timestamp;
+						}
+						const index = this.getSortIndex(messageFormatted, messageArray!);
+
+						messageArray!.splice(index, 0, messageFormatted);
+					})
+				}
+			} finally {
+				this.pendingMessageKeys.delete(key);
 			}
 		};
+
+		return (data, key) => handle(data, key);
 	}
 
-	listen() {
+	async listen() {
 		const gun = createGun();
+		const channelId = await this.getChannelId();
 		const match: LEXQuery & { "%": number } = {
 			".": {
 				"-": 1,
@@ -217,13 +267,15 @@ export class DMChannel {
 			"%": 100, // fetch the last 100 messages
 		};
 
-		const off = gun
-			.get("#chats/DMs/" + this.channelId)
+		const chain = gun
+			.get("chats/DMs/" + channelId)
 			.get(match)
-			.map()
-			.once(this.createGunCallback(false)).off;
+			.map();
 
-		return off;
+		// Use .on (not .once) so newly sent messages arrive without a reload.
+		chain.on(this.createGunCallback(false));
+
+		return () => chain.off();
 	}
 
 	private insertAtSortIndex(message: MessageFormatted) {
@@ -259,10 +311,8 @@ export class DMChannel {
 			);
 		const gun = createGun();
 		const user = this.getUser();
-
-		const secret = await SEA.secret(this.peerEnc, user._.sea);
-
-		if (!secret) throw new Error("unable to derive secret");
+		const secret = await this.getSecret();
+		const channelId = await this.getChannelId();
 
 		const encryptedContent = await SEA.encrypt(content, {
 			epriv: secret,
@@ -276,22 +326,22 @@ export class DMChannel {
 
 		await user
 			.get<Record<string, Record<string, { content: string }>>>("messages")
-			.get(this.channelId)
+			.get(channelId)
 			.get(String(messageId))
 			.put({ content: encryptedContent })
 			.then();
 
-		const putData = JSON.stringify({
+		const indexData = JSON.stringify({
 			sig: signature,
 			from: user._.sea.pub,
 		});
-
-		const hashData = await SEA.work(putData, null, null, { name: "SHA-256" });
+		const encryptedIndex = await SEA.encrypt(indexData, { epriv: secret });
+		const hashData = await SEA.work(encryptedIndex, null, null, { name: "SHA-256" });
 
 		await gun
-			.get("#chats/DMs/" + this.channelId)
+			.get("chats/DMs/" + channelId)
 			.get(String(messageId) + "#" + hashData)
-			.put(putData)
+			.put(encryptedIndex)
 			.then();
 	}
 }

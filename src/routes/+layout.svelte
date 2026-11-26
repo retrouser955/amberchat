@@ -1,7 +1,8 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
-  	import Navbar from '$lib/Components/Navbar/Navbar.svelte';
+	import Navbar from '$lib/Components/Navbar/Navbar.svelte';
+	import CallOverlay from '$lib/Components/CallOverlay/CallOverlay.svelte';
 	import { onMount } from 'svelte';
 	import { createGun } from '$lib/gun/Gun.svelte';
 
@@ -14,9 +15,10 @@
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<div class="w-screen min-h-screen bg-black">
+<div class="flex h-dvh w-full flex-col overflow-hidden bg-app">
 	<Navbar />
-	<div class="w-screen min-h-[calc(100vh-5rem)]">
+	<main class="min-h-0 flex-1">
 		{@render children()}
-	</div>
+	</main>
+	<CallOverlay />
 </div>

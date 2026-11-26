@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: amber-relay
+    runtime: node
+    plan: free
+    rootDir: relay
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Uncomment to lock the relay down (see relay/README.md).
+      # - key: RELAY_TOKEN
+      #   sync: false
+      # - key: ALLOWED_ORIGINS
+      #   value: https://your-frontend.example.com
