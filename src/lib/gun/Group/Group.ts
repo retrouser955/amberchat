@@ -82,6 +82,42 @@ function sleep(ms: number) {
 	return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Gun's `.put().then()` can resolve without surfacing an ack error. Group writes
+ * use this helper so a failed write names the exact path and rejects.
+ */
+export function putAt(chain: any, value: unknown, path: string) {
+	return new Promise<void>((resolve, reject) => {
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout>;
+
+		const finish = (error?: unknown) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+
+			if (error) {
+				console.error("[group] Gun write failed", { path, error });
+				reject(new Error(`Could not write ${path}: ${String(error)}`));
+			} else {
+				resolve();
+			}
+		};
+
+		timer = setTimeout(() => {
+			finish(`timed out writing ${path}`);
+		}, 15_000);
+
+		try {
+			chain.put(value, (ack: { err?: unknown }) => {
+				finish(ack?.err);
+			});
+		} catch (error) {
+			finish(error);
+		}
+	});
+}
+
 async function readKeyEnvelopeReady(gid: string, epoch: number, memberPub: string) {
 	for (let attempt = 0; attempt < 12; attempt += 1) {
 		const envelope = await readKeyEnvelope(gid, epoch, memberPub);
@@ -208,10 +244,11 @@ async function writeMeta(
 	const sig = await signCanonical(canonical, user._.sea);
 	const stored: GroupMetaSnapshot = { ...next, sig };
 
-	await createGun()
-		.get(`groups/${gid}/meta/${epoch}`)
-		.put(await seal(stored, key))
-		.then();
+	await putAt(
+		createGun().get(`groups/${gid}/meta`).get(String(epoch)),
+		await seal(stored, key),
+		`groups/${gid}/meta/${epoch}`
+	);
 
 	return stored;
 }
@@ -239,10 +276,11 @@ async function writeRoster(
 	const sig = await signCanonical(canonical, user._.sea);
 	const stored: GroupRoster = { ...next, sig };
 
-	await createGun()
-		.get(`groups/${gid}/roster/${epoch}`)
-		.put(await seal(stored, key))
-		.then();
+	await putAt(
+		createGun().get(`groups/${gid}/roster`).get(String(epoch)),
+		await seal(stored, key),
+		`groups/${gid}/roster/${epoch}`
+	);
 
 	return stored;
 }
@@ -269,10 +307,11 @@ async function writeCurrent(
 
 	current.sig = await signCanonical(currentCanonical(current), user._.sea);
 
-	await createGun()
-		.get(`groups/${gid}/current`)
-		.put(JSON.stringify(current))
-		.then();
+	await putAt(
+		createGun().get(`groups/${gid}`).get("current"),
+		JSON.stringify(current),
+		`groups/${gid}/current`
+	);
 
 	return current;
 }
@@ -302,15 +341,20 @@ async function writeKeyEnvelope(
 		sig
 	};
 
-	await createGun()
-		.get(`groups/${gid}/keys/${epoch}/${tag}`)
-		.put(JSON.stringify(envelope))
-		.then();
+	await putAt(
+		createGun().get(`groups/${gid}/keys`).get(String(epoch)).get(tag),
+		JSON.stringify(envelope),
+		`groups/${gid}/keys/${epoch}/${tag}`
+	);
 }
 
 export async function readKeyEnvelope(gid: string, epoch: number, memberPub: string) {
 	const tag = await groupMemberTag(gid, memberPub);
-	const raw = await createGun().get(`groups/${gid}/keys/${epoch}/${tag}`).then();
+	const raw = await createGun()
+		.get(`groups/${gid}/keys`)
+		.get(String(epoch))
+		.get(tag)
+		.then();
 	const envelope = parseJson<GroupKeyEnvelope>(raw);
 
 	if (!envelope) return;
@@ -326,7 +370,7 @@ export async function readKeyEnvelope(gid: string, epoch: number, memberPub: str
 }
 
 export async function readCurrent(gid: string): Promise<GroupCurrent | undefined> {
-	const raw = await createGun().get(`groups/${gid}/current`).then();
+	const raw = await createGun().get(`groups/${gid}`).get("current").then();
 	const current = parseJson<GroupCurrent>(raw);
 
 	if (!current) return;
@@ -343,7 +387,7 @@ export async function readRoster(
 	epoch: number,
 	key: string
 ): Promise<GroupRoster | undefined> {
-	const raw = await createGun().get(`groups/${gid}/roster/${epoch}`).then();
+	const raw = await createGun().get(`groups/${gid}/roster`).get(String(epoch)).then();
 	if (typeof raw !== "string") return;
 
 	const roster = await open<GroupRoster>(raw, key);
@@ -367,7 +411,7 @@ export async function readMeta(
 	epoch: number,
 	key: string
 ): Promise<GroupMetaSnapshot | undefined> {
-	const raw = await createGun().get(`groups/${gid}/meta/${epoch}`).then();
+	const raw = await createGun().get(`groups/${gid}/meta`).get(String(epoch)).then();
 	if (typeof raw !== "string") return;
 
 	const meta = await open<GroupMetaSnapshot>(raw, key);
@@ -387,7 +431,7 @@ export async function readMeta(
 export async function readGroupCall(
 	backup: GroupBackup
 ): Promise<GroupCallRecord | undefined> {
-	const raw = await createGun().get(`groups/${backup.gid}/call`).then();
+	const raw = await createGun().get(`groups/${backup.gid}`).get("call").then();
 	if (typeof raw !== "string") return;
 
 	const split = splitHint(raw);
@@ -420,16 +464,17 @@ export async function writeGroupCall(backup: GroupBackup, record: GroupCallRecor
 	const hint = await keyHint(key);
 	const cipher = await seal(next, key);
 
-	await createGun()
-		.get(`groups/${backup.gid}/call`)
-		.put(`${hint}.${cipher}`)
-		.then();
+	await putAt(
+		createGun().get(`groups/${backup.gid}`).get("call"),
+		`${hint}.${cipher}`,
+		`groups/${backup.gid}/call`
+	);
 
 	return next;
 }
 
 export async function clearGroupCall(gid: string) {
-	await createGun().get(`groups/${gid}/call`).put(null).then();
+	await putAt(createGun().get(`groups/${gid}`).get("call"), null, `groups/${gid}/call`);
 }
 
 export async function saveGroupBackup(backup: GroupBackup) {
@@ -439,11 +484,11 @@ export async function saveGroupBackup(backup: GroupBackup) {
 	const ref = await groupRef(backup.gid);
 	const cipher = await SEA.encrypt(JSON.stringify(backup), user._.sea);
 
-	await user
-		.get<Record<string, string>>("groups")
-		.get(ref)
-		.put(cipher)
-		.then();
+	await putAt(
+		user.get<Record<string, string>>("groups").get(ref),
+		cipher,
+		`~${user._.sea.pub}/groups/${ref}`
+	);
 }
 
 async function decryptBackup(cipher: unknown): Promise<GroupBackup | undefined> {

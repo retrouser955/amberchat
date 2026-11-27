@@ -100,6 +100,11 @@ relay/index.js                   standalone Gun relay
 - Do not prefix public souls with `#`; Gun treats them as hash-verified souls
   and normal puts do not ack. `.off` uses `this`: call it on the chain or wrap
   it (`() => chain.off()`), never extract the method.
+- Never put a string directly on a soul path. `gun.get("groups/<gid>/current")
+  .put(json)` fails with `Data at root of graph must be a node (an object)`
+  because a soul must be an object. Put strings as keys on a parent node:
+  `gun.get("groups/<gid>").get("current").put(json)`. The same applies to
+  `groups/<gid>/meta/<epoch>`, `keys/<epoch>/<tag>`, presence, and signals.
 - Friends: invites are `amber://request_friend?cert=...&pub=...`. `createInvite()`
   caches an encrypted `{ "*": "fr" }` cert in `certs.fr`; `addFriend()` writes a
   cert to `~friend.fr[self]`; `acceptFriend()` writes
@@ -153,6 +158,9 @@ relay/index.js                   standalone Gun relay
 - Group pages live under `/groups` with their own `AuthGuard` + `Sidebar`
   layout. `GroupContact` is the sidebar row. `groups/[id]/settings` is
   owner-editable; other members see a read-only view.
+- Use `GroupAvatar` (not `GunAvatar`) for groups. It renders
+  `GroupMetaSnapshot.avatar` when present, otherwise a deterministic colored
+  users icon derived from `gid`; use `GunAvatar` only for people.
 - Icons: `lucide-svelte/icons/<name>`. `@lucide/svelte` is also installed; do not
   mix it in.
 

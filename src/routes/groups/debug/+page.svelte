@@ -31,7 +31,10 @@
 		try {
 			const gun = createGun();
 			const tag = await groupMemberTag(gid, member);
-			const keysNode = await gun.get(`groups/${gid}/keys/${epoch}`).then();
+			const keysNode = await gun
+				.get(`groups/${gid}/keys`)
+				.get(String(epoch))
+				.then();
 			const keys =
 				keysNode && typeof keysNode === "object"
 					? Object.keys(keysNode as Record<string, unknown>).filter(
@@ -47,10 +50,20 @@
 				expectedTag: tag,
 				expectedKeyPath: `groups/${gid}/keys/${epoch}/${tag}`,
 				keysNodeKeys: keys,
-				keyEnvelope: await gun.get(`groups/${gid}/keys/${epoch}/${tag}`).then(),
-				current: await gun.get(`groups/${gid}/current`).then(),
-				rosterExists: !!(await gun.get(`groups/${gid}/roster/${epoch}`).then()),
-				metaExists: !!(await gun.get(`groups/${gid}/meta/${epoch}`).then())
+				keyEnvelope: await gun
+					.get(`groups/${gid}/keys`)
+					.get(String(epoch))
+					.get(tag)
+					.then(),
+				current: await gun.get(`groups/${gid}`).get("current").then(),
+				rosterExists: !!(await gun
+					.get(`groups/${gid}/roster`)
+					.get(String(epoch))
+					.then()),
+				metaExists: !!(await gun
+					.get(`groups/${gid}/meta`)
+					.get(String(epoch))
+					.then())
 			};
 
 			result = JSON.stringify(info, null, 2);

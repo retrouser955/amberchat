@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from "$app/state";
-	import GunAvatar from "../GunAvatar/GunAvatar.svelte";
+	import GroupAvatar from "../GroupAvatar/GroupAvatar.svelte";
 	import { cn } from "$lib/utils";
 
 	const {
@@ -25,6 +25,6 @@
 		active ? "bg-selected text-ink" : "text-ink-muted hover:bg-hover hover:text-ink-soft"
 	)}
 >
-	<GunAvatar pub={gid} avatarSource={avatar} class="h-8 w-8 shrink-0 rounded-full" />
+	<GroupAvatar {gid} {avatar} class="h-8 w-8" />
 	<span class="min-w-0 truncate text-sm font-medium max-md:hidden">{name}</span>
 </a>

@@ -10,11 +10,11 @@
 	import Save from "lucide-svelte/icons/save";
 	import UserMinus from "lucide-svelte/icons/user-minus";
 	import UserPlus from "lucide-svelte/icons/user-plus";
-	import Users from "lucide-svelte/icons/users";
 	import { Button } from "$lib/Components/ui/button";
 	import { Input } from "$lib/Components/ui/input";
 	import { Label } from "$lib/Components/ui/label";
 	import GunAvatar from "$lib/Components/GunAvatar/GunAvatar.svelte";
+	import GroupAvatar from "$lib/Components/GroupAvatar/GroupAvatar.svelte";
 	import { fetchProfile, gunData } from "$lib/gun/Gun.svelte";
 	import { canSeeAvatar, friendPubsList } from "$lib/gun/Friends.svelte";
 	import {
@@ -245,9 +245,17 @@
 				</p>
 			{:else if backup}
 				<section class="space-y-3 rounded-lg border border-white/5 bg-panel p-4 sm:p-5">
-					<div class="flex items-center gap-2">
-						<Users class="h-4 w-4 text-blurple" />
-						<h2 class="text-sm font-semibold text-ink">Group</h2>
+					<div class="flex items-center gap-3">
+						<GroupAvatar
+							gid={gid}
+							avatar={backup.avatar}
+							class="h-12 w-12"
+							iconClass="h-6 w-6"
+						/>
+						<div>
+							<h2 class="text-sm font-semibold text-ink">Group</h2>
+							<p class="text-xs text-ink-muted">{members.length} members</p>
+						</div>
 					</div>
 
 					<div class="grid gap-2">

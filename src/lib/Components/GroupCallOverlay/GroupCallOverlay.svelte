@@ -12,6 +12,7 @@
 	import Users from "lucide-svelte/icons/users";
 	import LoaderCircle from "lucide-svelte/icons/loader-circle";
 	import GunAvatar from "../GunAvatar/GunAvatar.svelte";
+	import GroupAvatar from "../GroupAvatar/GroupAvatar.svelte";
 	import { Button } from "../ui/button";
 	import { gunData } from "$lib/gun/Gun.svelte";
 	import { canSeeAvatar } from "$lib/gun/Friends.svelte";
@@ -113,9 +114,11 @@
 {#if showCall}
 	<div class="fixed inset-0 z-[100] flex flex-col bg-rail text-ink">
 		<header class="flex h-14 shrink-0 items-center gap-3 border-b border-white/5 px-4">
-			<div class="flex h-8 w-8 items-center justify-center rounded-full bg-white/5">
-				<Users class="h-4 w-4 text-blurple" />
-			</div>
+			<GroupAvatar
+				gid={groupCallManager.gid ?? ""}
+				class="h-8 w-8"
+				iconClass="h-4 w-4"
+			/>
 			<div class="min-w-0">
 				<p class="truncate text-sm font-semibold">
 					{groupCallManager.groupName || "Group call"}

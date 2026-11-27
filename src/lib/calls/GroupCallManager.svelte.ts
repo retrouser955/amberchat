@@ -15,6 +15,7 @@ import {
 	groupCallToTag,
 	listGroupBackups,
 	loadGroupBackup,
+	putAt,
 	readGroupCall,
 	writeGroupCall
 } from "../gun/Group/Group";
@@ -198,7 +199,7 @@ export class GroupCallManager {
 			if (!this.gun || generation !== this.generation) return;
 
 			for (const backup of backups) {
-				const chain = this.gun.get(`groups/${backup.gid}/call`);
+				const chain = this.gun.get(`groups/${backup.gid}`).get("call");
 
 				chain.on((value) => {
 					void this.handleCallRecord(backup.gid, value).catch((error) => {
@@ -587,10 +588,11 @@ export class GroupCallManager {
 		const channelId = await groupCallChannelId(this.gid, this.callId);
 		const cipher = await seal(presence, this.callSecret);
 
-		await this.gun
-			.get(`calls/groups/${channelId}/participants/${tag}`)
-			.put(cipher)
-			.then();
+		await putAt(
+			this.gun.get(`calls/groups/${channelId}/participants`).get(tag),
+			cipher,
+			`calls/groups/${channelId}/participants/${tag}`
+		);
 
 		this.presence.set(presence.pub, presence);
 		this.tagToPub.set(tag, presence.pub);
@@ -603,7 +605,11 @@ export class GroupCallManager {
 		const channelId = await groupCallChannelId(this.gid, this.callId);
 
 		try {
-			await this.gun.get(`calls/groups/${channelId}/participants/${tag}`).put(null).then();
+			await putAt(
+				this.gun.get(`calls/groups/${channelId}/participants`).get(tag),
+				null,
+				`calls/groups/${channelId}/participants/${tag}`
+			);
 		} catch {
 			// best effort
 		}
@@ -640,7 +646,8 @@ export class GroupCallManager {
 		});
 
 		const signalChain = this.gun
-			.get(`calls/groups/${channelId}/signals/${selfTag}`)
+			.get(`calls/groups/${channelId}/signals`)
+			.get(selfTag)
 			.map();
 
 		signalChain.on((value, key) => {
@@ -956,11 +963,13 @@ export class GroupCallManager {
 		const toTag = await groupCallToTag(this.gid, this.callId, to);
 		const fromTag = await groupCallToTag(this.gid, this.callId, this.userPub);
 
-		await this.gun
-			.get(`calls/groups/${channelId}/signals/${toTag}`)
-			.get(`${fromTag}#${Gun.state()}`)
-			.put(JSON.stringify(record))
-			.then();
+		const signalKey = `${fromTag}#${Gun.state()}`;
+
+		await putAt(
+			this.gun.get(`calls/groups/${channelId}/signals`).get(toTag).get(signalKey),
+			JSON.stringify(record),
+			`calls/groups/${channelId}/signals/${toTag}/${signalKey}`
+		);
 	}
 
 	private async deleteSignal(key: string) {
@@ -969,11 +978,11 @@ export class GroupCallManager {
 		const channelId = await groupCallChannelId(this.gid, this.callId);
 
 		try {
-			await this.gun
-				.get(`calls/groups/${channelId}/signals/${this.selfToTag}`)
-				.get(key)
-				.put(null)
-				.then();
+			await putAt(
+				this.gun.get(`calls/groups/${channelId}/signals`).get(this.selfToTag).get(key),
+				null,
+				`calls/groups/${channelId}/signals/${this.selfToTag}/${key}`
+			);
 		} catch {
 			// best effort
 		}

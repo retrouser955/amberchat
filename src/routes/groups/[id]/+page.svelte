@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from "$app/state";
 	import { onMount, tick } from "svelte";
-	import GunAvatar from "$lib/Components/GunAvatar/GunAvatar.svelte";
+	import GroupAvatar from "$lib/Components/GroupAvatar/GroupAvatar.svelte";
 	import Message from "$lib/Components/Message/Message.svelte";
 	import MessageActionSheet from "$lib/Components/Message/MessageActionSheet.svelte";
 	import { Input } from "$lib/Components/ui/input";
@@ -237,10 +237,11 @@
 	<header
 		class="flex h-12 shrink-0 items-center gap-2.5 border-b border-black/20 px-4 shadow-[0_1px_0_rgba(0,0,0,0.2)]"
 	>
-		<GunAvatar
-			pub={gid}
-			avatarSource={channel?.meta?.avatar}
-			class="h-6 w-6 shrink-0 rounded-full"
+		<GroupAvatar
+			{gid}
+			avatar={channel?.meta?.avatar}
+			class="h-6 w-6"
+			iconClass="h-3.5 w-3.5"
 		/>
 		<div class="min-w-0">
 			<p class="truncate text-[15px] font-semibold text-ink">{title}</p>
@@ -306,7 +307,12 @@
 			</div>
 		{:else if channel && channel.messages.length === 0}
 			<div class="flex h-full flex-col items-center justify-center px-6 text-center">
-				<GunAvatar pub={gid} avatarSource={channel.meta?.avatar} class="mb-4 h-16 w-16 rounded-full" />
+				<GroupAvatar
+					{gid}
+					avatar={channel.meta?.avatar}
+					class="mb-4 h-16 w-16"
+					iconClass="h-8 w-8"
+				/>
 				<p class="text-xl font-semibold text-ink">{title}</p>
 				{#if channel.meta?.description}
 					<p class="mt-2 max-w-sm text-sm text-ink-soft">{channel.meta.description}</p>

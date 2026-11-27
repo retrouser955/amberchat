@@ -188,7 +188,7 @@ export class GroupChannel {
 		const gun = createGun();
 		await this.refreshMembership();
 
-		const currentChain = gun.get(`groups/${this.gid}/current`);
+		const currentChain = gun.get(`groups/${this.gid}`).get("current");
 		currentChain.on((value) => {
 			if (value) {
 				void this.refreshMembership().catch((error) => {
