@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from "$app/navigation";
 	import { page } from "$app/state";
+	import { env } from "$env/dynamic/public";
 	import { onMount } from "svelte";
 	import ArrowLeft from "lucide-svelte/icons/arrow-left";
 	import Copy from "lucide-svelte/icons/copy";
@@ -155,8 +156,9 @@
 		success = undefined;
 
 		try {
-			invite = await addMember(gid, pub);
+			const link = await addMember(gid, pub);
 			await load();
+			invite = link;
 			success = "Member added. Share the invite link with them.";
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
@@ -303,6 +305,9 @@
 							Copy
 						</Button>
 					</div>
+					<p class="text-[11px] text-ink-muted">
+						Relay: {env.PUBLIC_GUN_RELAY ?? "http://localhost:3000/gun"}
+					</p>
 				</section>
 
 				<section class="space-y-3 rounded-lg border border-white/5 bg-panel p-4 sm:p-5">

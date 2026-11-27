@@ -1,4 +1,5 @@
 import Gun from "gun";
+import { env } from "$env/dynamic/public";
 import {
 	createGun,
 	ensureUserLogged,
@@ -30,11 +31,16 @@ import type {
 
 const { SEA } = Gun;
 
-export function inviteLink(gid: string, from: string, epoch: number) {
+export function inviteLink(gid: string, from: string, epoch: number, to?: string) {
 	const url = new URL("amber://join_group");
 	url.searchParams.set("gid", gid);
 	url.searchParams.set("from", from);
 	url.searchParams.set("epoch", String(epoch));
+
+	// Include the intended member when this is a targeted DM invite. It lets
+	// the joining client detect a stale/wrong account immediately.
+	if (to) url.searchParams.set("to", to);
+
 	return url.toString();
 }
 
@@ -528,7 +534,7 @@ async function notifyInvite(backup: GroupBackup, memberPub: string, epoch: numbe
 	try {
 		const channel = new DMChannel(memberPub);
 		await channel.fetchUserEpub();
-		await channel.send(inviteLink(backup.gid, user._.sea.pub, epoch));
+		await channel.send(inviteLink(backup.gid, user._.sea.pub, epoch, memberPub));
 	} catch {
 		// The graph invite still works even if the DM notification fails.
 	}
@@ -685,7 +691,7 @@ export async function addMember(gid: string, pub: string): Promise<string> {
 	backup.updatedAt = Date.now();
 	await saveGroupBackup(backup);
 
-	const link = inviteLink(gid, user._.sea.pub, epoch);
+	const link = inviteLink(gid, user._.sea.pub, epoch, pub);
 	await notifyInvite(backup, pub, epoch);
 
 	return link;
@@ -843,11 +849,18 @@ export async function joinGroup(invite: string): Promise<GroupBackup> {
 
 	const gid = url.searchParams.get("gid");
 	const from = url.searchParams.get("from");
+	const to = url.searchParams.get("to");
 	const epochRaw = url.searchParams.get("epoch");
 	const epochParam = Number(epochRaw);
 
 	if (!gid || !from || !epochRaw || !Number.isInteger(epochParam)) {
 		throw new Error("The group invite is incomplete.");
+	}
+
+	if (to && to !== user._.sea.pub) {
+		throw new Error(
+			"This invite was created for a different account. Ask the owner to invite this account."
+		);
 	}
 
 	try {
@@ -865,7 +878,8 @@ export async function joinGroup(invite: string): Promise<GroupBackup> {
 			gid,
 			epoch: epochParam,
 			from,
-			member: user._.sea.pub
+			member: user._.sea.pub,
+			relay: env.PUBLIC_GUN_RELAY ?? "http://localhost:3000/gun"
 		});
 		throw new Error(
 			"The group invite has not reached this device yet. Check that both users use the same relay, wait a moment, then try again."
@@ -892,7 +906,8 @@ export async function joinGroup(invite: string): Promise<GroupBackup> {
 			from,
 			member: user._.sea.pub,
 			roster: !!roster,
-			meta: !!meta
+			meta: !!meta,
+			relay: env.PUBLIC_GUN_RELAY ?? "http://localhost:3000/gun"
 		});
 		throw new Error(
 			"The group data has not synced yet. Check that both users use the same relay, wait a moment, then try again."

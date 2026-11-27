@@ -6,6 +6,7 @@
 	import LogIn from "lucide-svelte/icons/log-in";
 	import { Button } from "$lib/Components/ui/button";
 	import { Input } from "$lib/Components/ui/input";
+	import { env } from "$env/dynamic/public";
 	import { joinGroup } from "$lib/gun/Group/Group";
 	import { groupCallManager } from "$lib/calls/GroupCallManager.svelte";
 
@@ -104,6 +105,10 @@
 						{error}
 					</p>
 				{/if}
+
+				<p class="mt-3 text-[11px] text-ink-muted">
+					Relay: {env.PUBLIC_GUN_RELAY ?? "http://localhost:3000/gun"}
+				</p>
 			</section>
 		</div>
 	</div>
