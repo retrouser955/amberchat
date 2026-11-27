@@ -1,10 +1,19 @@
 import http from "node:http";
+import path from "node:path";
 import cors from "cors";
 import express from "express";
 import Gun from "gun";
 
 const PORT = Number(process.env.PORT) || 3000;
-const DATA_DIR = process.env.GUN_DATA_DIR || "radata";
+const DATA_DIR = path.resolve(process.env.GUN_DATA_DIR || "radata");
+
+if (process.env.NODE_ENV === "production" && !process.env.GUN_DATA_DIR) {
+	console.warn(
+		"[relay] GUN_DATA_DIR is not set. Radisk is writing to a relative path, " +
+			"which is ephemeral on Render/Fly/Docker unless a persistent volume is mounted. " +
+			"Accounts will be lost on restart and login from another device will fail.",
+	);
+}
 
 // Browser-side allowlist. WebSockets are NOT subject to CORS: the browser sends
 // the Origin header but does not enforce anything, so the check has to happen
@@ -53,7 +62,13 @@ app.use(
 );
 
 app.get("/health", (_req, res) => {
-	res.json({ ok: true, uptime: Math.round(process.uptime()), now: Date.now() });
+	res.json({
+		ok: true,
+		uptime: Math.round(process.uptime()),
+		now: Date.now(),
+		dataDir: DATA_DIR,
+		dataDirConfigured: Boolean(process.env.GUN_DATA_DIR),
+	});
 });
 
 app.get("/", (_req, res) => {

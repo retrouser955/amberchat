@@ -6,6 +6,13 @@
 app = 'amberchat-relay-berry'
 primary_region = 'syd'
 
+[mounts]
+  source = 'amber_data'
+  destination = '/data'
+
+[env]
+  GUN_DATA_DIR = '/data'
+
 [build]
 [http_service]
   internal_port = 3000

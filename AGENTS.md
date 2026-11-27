@@ -60,8 +60,8 @@ src/
     calls/
       CallManager.svelte.ts   # WebRTC + Gun signaling + friend authorization
     Components/
-      AuthGuard, CallOverlay, Navbar, Sidebar, Message, GunAvatar,
-      ui/{button,dialog,input,label}
+      AuthGuard, CallOverlay, Navbar, Sidebar, Message,
+      MessageActionSheet, GunAvatar, ui/{button,dialog,input,label}
     utils.ts                  # cn(), shadcn prop helper types
     assets/
 ```
@@ -94,6 +94,7 @@ The `DMChannel` class encapsulates one 1:1 conversation:
    - encrypts the index envelope `{ sig, from }` with the same secret and writes it to `chats/DMs/<opaqueChannelId>` as `"<messageId>#<sha256>"`. `sig` is `SEA.sign("SIGNED_MESSAGE", user._.sea)`. Do not prefix public souls with `#`: Gun treats those as hash-verified souls and normal puts do not persist/ack.
 4. `listen()` subscribes with `.on()` to a Gun LEX query (last 100 entries, `< "\uffff"`) so new messages arrive live without a reload; `loadHistory()` pages backwards from `lastMessage` with `.once()`. Each encrypted index entry is decrypted, signature-verified with `SEA.verify`, then the actual message is fetched from `~<from>.messages[<opaqueChannelId>][messageId]` and decrypted. A message key is cached only after it is rendered successfully, so a content read that has not synced yet can be retried.
 5. Messages are inserted in timestamp order via binary search (`getSortIndex`/`insertAtSortIndex`); do not re-sort after insertion. `navigator.locks` (`GUNDB_MESSAGE_POP`, `GUNDB_MESSAGE_ARRAY`, `CHAT_FRIENDS_SIDEBAR`) serializes async updates to arrays.
+6. The content record may include an optional `meta` field encrypted with the same channel secret. `meta.replyTo` stores an id/from/alias/preview snapshot; `meta.editOf` marks an append-only edit event. Edit events are not inserted into the visible message list; they update the target only when the edit author matches the target author. Pending edits are applied when the target arrives.
 
 `loadHistory()` is implemented but not yet surfaced in the UI. Keep when extending the chat view. Note that Gun's `.off` method uses `this`; wrap chains in a closure (`() => chain.off()`) instead of extracting `.off` directly. The opaque channel scheme is a breaking data change: messages stored under the old pub-pair channel ID (or the older `#chats` namespace) are not read.
 
@@ -128,7 +129,8 @@ When changing graph keys (`fr`, `friends`, `messages`, `certs.fr`, `epub`, `chat
 - The app uses a Discord-inspired dark palette defined in `src/routes/layout.css` (`bg-app`, `bg-panel`, `bg-rail`, `bg-elevated`, `bg-hover`, `bg-selected`, `text-ink`, `text-ink-soft`, `text-ink-muted`, `bg-blurple`, `text-positive`). Reuse these tokens instead of raw `neutral-*` classes.
 - The root shell is a `h-dvh` flex column with a 3.5rem (`h-14`) Navbar; pages use `h-full`. The legacy `.h-enough` utility is now `calc(100vh - 3.5rem)`.
 - `Contact` renders a link to `/chat/{pub}` and derives its active state from `page.url.pathname`; follow SvelteKit patterns (e.g. `$app/state` for `page.params`, `$app/navigation` for `goto`) as in existing routes.
-- `Message` supports a `compact` prop for grouped consecutive messages; the chat page sets it when the same author posts within five minutes.
+- `Message` supports a `compact` prop for grouped consecutive messages; the chat page sets it when the same author posts within five minutes. Messages with a reply are never compact.
+- Message actions: desktop uses hover Reply/Edit buttons; touch uses a long-press bottom sheet (`MessageActionSheet`) and swipe-right-to-reply. Reply/edit are composed in the chat composer, not inline in the message row.
 - The chat layout is `AuthGuard` → `Sidebar` (240px, collapsing to 64px below `md`) → main conversation pane. Keep new protected pages inside an `AuthGuard`.
 - Prefer `lucide-svelte/icons/<name>` for icons (both `lucide-svelte` and `@lucide/svelte` are installed; use the former to stay consistent).
 

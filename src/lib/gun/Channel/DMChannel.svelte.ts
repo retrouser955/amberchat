@@ -8,8 +8,25 @@ export interface MessageFrozen {
 	from: string;
 }
 
+export interface ReplyReference {
+	id: number;
+	from: string;
+	alias?: string;
+	preview: string;
+}
+
+export interface MessageMeta {
+	v: 2;
+	replyTo?: ReplyReference;
+	editOf?: {
+		id: number;
+		from: string;
+	};
+}
+
 export interface MessageRaw {
 	content: string; // encrypted
+	meta?: string; // encrypted MessageMeta
 }
 
 export interface MessageFormatted {
@@ -20,6 +37,13 @@ export interface MessageFormatted {
 		avatar?: string;
 	};
 	timestamp: number;
+	replyTo?: ReplyReference;
+	editedAt?: number;
+}
+
+export interface SendMessageOptions {
+	replyTo?: MessageFormatted;
+	editOf?: MessageFormatted;
 }
 
 export type GunCallback = (data: string | undefined, key: string) => unknown;
@@ -43,6 +67,7 @@ export class DMChannel {
 	lastMessage?: number;
 	currentMessagesCache = new Set<string>();
 	private pendingMessageKeys = new Set<string>();
+	private pendingEdits = new Map<string, { content: string; editedAt: number }>();
 	private channelIdCache?: string;
 	private secretCache?: string;
 	private container?: HTMLDivElement;
@@ -76,6 +101,78 @@ export class DMChannel {
 
 		this.channelIdCache = channelId;
 		return channelId;
+	}
+
+	private async decryptMeta(raw: string | undefined, secret: string) {
+		if (!raw) return;
+
+		try {
+			const decrypted = await SEA.decrypt(raw, { epriv: secret });
+			const parsed =
+				typeof decrypted === "string" ? JSON.parse(decrypted) : decrypted;
+
+			if (!parsed || typeof parsed !== "object") return;
+			if ((parsed as Partial<MessageMeta>).v !== 2) return;
+
+			return parsed as MessageMeta;
+		} catch {
+			return;
+		}
+	}
+
+	private trackLastMessage(timestamp: number) {
+		if (!this.lastMessage || this.lastMessage > timestamp) {
+			this.lastMessage = timestamp;
+		}
+	}
+
+	private applyEdit(
+		target: { id: number; from: string },
+		from: string,
+		content: string,
+		editedAt: number,
+		messageArray?: MessageFormatted[],
+	) {
+		if (target.from !== from) return;
+
+		const arrays = messageArray ? [this.messages, messageArray] : [this.messages];
+
+		for (const messages of arrays) {
+			const existing = messages.find(
+				(message) =>
+					message.timestamp === target.id && message.author.pub === target.from,
+			);
+
+			if (!existing) continue;
+
+			if ((existing.editedAt ?? 0) < editedAt) {
+				existing.content = content;
+				existing.editedAt = editedAt;
+			}
+
+			return;
+		}
+
+		const key = `${target.from}:${target.id}`;
+		const pending = this.pendingEdits.get(key);
+
+		if (!pending || pending.editedAt < editedAt) {
+			this.pendingEdits.set(key, { content, editedAt });
+		}
+	}
+
+	private applyPendingEdit(message: MessageFormatted) {
+		const key = `${message.author.pub}:${message.timestamp}`;
+		const pending = this.pendingEdits.get(key);
+
+		if (!pending) return;
+
+		if ((message.editedAt ?? 0) < pending.editedAt) {
+			message.content = pending.content;
+			message.editedAt = pending.editedAt;
+		}
+
+		this.pendingEdits.delete(key);
 	}
 
 	async fetchUserEpub() {
@@ -211,6 +308,51 @@ export class DMChannel {
 					return;
 				}
 
+				const meta = await this.decryptMeta(msg.meta, secret);
+
+				if (meta?.editOf) {
+					const targetId = Number(meta.editOf.id);
+					const targetFrom = meta.editOf.from;
+
+					if (!Number.isInteger(targetId) || typeof targetFrom !== "string") return;
+					if (targetFrom !== jsonData.from) return;
+
+					this.currentMessagesCache.add(key);
+
+					if (!isLoadingOldMessage) {
+						navigator.locks.request("GUNDB_MESSAGE_POP", () => {
+							this.trackLastMessage(messageId);
+							this.applyEdit(
+								{ id: targetId, from: targetFrom },
+								jsonData.from,
+								content,
+								messageId,
+							);
+						});
+					} else {
+						navigator.locks.request("GUNDB_MESSAGE_ARRAY", () => {
+							this.trackLastMessage(messageId);
+							this.applyEdit(
+								{ id: targetId, from: targetFrom },
+								jsonData.from,
+								content,
+								messageId,
+								messageArray,
+							);
+						});
+					}
+
+					return;
+				}
+
+				const replyTo =
+					meta?.replyTo &&
+					Number.isInteger(meta.replyTo.id) &&
+					typeof meta.replyTo.from === "string" &&
+					typeof meta.replyTo.preview === "string"
+						? meta.replyTo
+						: undefined;
+
 				const messageFormatted: MessageFormatted = {
 					content,
 					author: {
@@ -221,28 +363,20 @@ export class DMChannel {
 						pub: jsonData.from,
 					},
 					timestamp: messageId,
+					replyTo,
 				};
 
+				this.applyPendingEdit(messageFormatted);
 				this.currentMessagesCache.add(key);
 
 				if (!isLoadingOldMessage) {
 					navigator.locks.request("GUNDB_MESSAGE_POP", () => {
-						if (
-							!this.lastMessage ||
-							this.lastMessage > messageFormatted.timestamp
-						) {
-							this.lastMessage = messageFormatted.timestamp;
-						}
+						this.trackLastMessage(messageFormatted.timestamp);
 						this.insertAtSortIndex(messageFormatted);
 					});
 				} else {
 					navigator.locks.request("GUNDB_MESSAGE_ARRAY", () => {
-						if (
-							!this.lastMessage ||
-							this.lastMessage > messageFormatted.timestamp
-						) {
-							this.lastMessage = messageFormatted.timestamp;
-						}
+						this.trackLastMessage(messageFormatted.timestamp);
 						const index = this.getSortIndex(messageFormatted, messageArray!);
 
 						messageArray!.splice(index, 0, messageFormatted);
@@ -304,7 +438,7 @@ export class DMChannel {
 		this.container = container;
 	}
 
-	async send(content: string) {
+	async send(content: string, options: SendMessageOptions = {}) {
 		if (!this.peerEnc)
 			throw new Error(
 				"Could not fetch peer's public encryption key. Please fetch it first...",
@@ -318,6 +452,30 @@ export class DMChannel {
 			epriv: secret,
 		});
 
+		const meta: MessageMeta | undefined = options.editOf
+			? {
+					v: 2,
+					editOf: {
+						id: options.editOf.timestamp,
+						from: options.editOf.author.pub,
+					},
+				}
+			: options.replyTo
+				? {
+						v: 2,
+						replyTo: {
+							id: options.replyTo.timestamp,
+							from: options.replyTo.author.pub,
+							alias: options.replyTo.author.alias,
+							preview: options.replyTo.content.slice(0, 140),
+						},
+					}
+				: undefined;
+
+		const encryptedMeta = meta
+			? await SEA.encrypt(JSON.stringify(meta), { epriv: secret })
+			: undefined;
+
 		const signature = await SEA.sign("SIGNED_MESSAGE", user._.sea);
 
 		if (!signature) throw new Error("unable to derive signature");
@@ -325,10 +483,13 @@ export class DMChannel {
 		const messageId = Gun.state();
 
 		await user
-			.get<Record<string, Record<string, { content: string }>>>("messages")
+			.get<Record<string, Record<string, { content: string; meta?: string }>>>("messages")
 			.get(channelId)
 			.get(String(messageId))
-			.put({ content: encryptedContent })
+			.put({
+				content: encryptedContent,
+				...(encryptedMeta ? { meta: encryptedMeta } : {}),
+			})
 			.then();
 
 		const indexData = JSON.stringify({

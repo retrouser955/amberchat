@@ -98,7 +98,7 @@ channel IDs. What a stranger can do is consume your quota and store junk.
 | Variable         | Default   | Notes                                                                  |
 | ---------------- | --------- | ---------------------------------------------------------------------- |
 | `PORT`           | `3000`    | Most hosts inject this.                                                |
-| `GUN_DATA_DIR`   | `radata`  | Where radisk stores its files. Ignored on hosts with an ephemeral disk. |
+| `GUN_DATA_DIR`   | `radata`  | Radisk directory. Mount a persistent volume here for cross-device login. |
 | `ALLOWED_ORIGINS`| *(empty)* | Comma-separated browser origins, e.g. `https://amber.vercel.app`.       |
 | `RELAY_TOKEN`    | *(empty)* | Shared secret, passed as `?token=…` on the relay URL.                  |
 | `NODE_ENV`       | —         | Set to `production` on managed hosts.                                   |
@@ -120,8 +120,11 @@ Free-tier behaviour that matters for a demo:
   to wake. Open the `/health` URL about a minute before you demo, or keep one
   client connected (Gun's WebSocket heartbeats count as traffic).
 - The filesystem is **ephemeral** and free instances may restart at any time.
-  That is fine here: the relay is a sync/backup peer, and the two demo browsers
-  keep their own data.
+  This is **not** fine for account login on a new device: a phone and a PC do
+  not share browser storage, and the relay is the only shared copy of the user
+  account until that device has synced it. If the relay restarts before the PC
+  logs in, the account is gone and login fails with "Wrong user or password."
+  See [Persistence](#persistence) for the fix.
 - 750 instance hours per workspace per month; always-on costs ~730 hours, so one
   service fits, but Render's terms say free instances are not for production.
 
@@ -130,16 +133,67 @@ always-on services with no sleeping (card required for identity verification),
 and **Oracle Cloud Always Free** gives 2 Ampere OCPUs / 12 GB RAM with no sleep
 (card required, instances idle for a week may be reclaimed).
 
-### Docker (Northflank, Hugging Face Spaces, a VPS, …)
+## Persistence
+
+`localStorage: false` in `relay/index.js` only disables browser `localStorage`;
+it does **not** disable disk storage. The relay runs Gun's radisk store at
+`GUN_DATA_DIR` (default `radata`).
+
+For login from a new device, that directory must survive relay restarts. A new
+PC has no account data in its browser, so the relay is the only source for the
+account record. If the relay restarts with an empty filesystem, the account is
+gone and login fails.
+
+### Fly.io
+
+Create a volume once, then mount it:
+
+```bash
+fly volumes create amber_data --region syd --size 1 -a amberchat-relay-berry
+```
+
+Add to `relay/fly.toml`:
+
+```toml
+[mounts]
+  source = "amber_data"
+  destination = "/data"
+
+[env]
+  GUN_DATA_DIR = "/data"
+```
+
+Keep the relay at **one machine**. Radisk files are not safe for multiple
+processes writing to separate local disks.
+
+### Render
+
+Render free instances have an ephemeral filesystem. To keep accounts, use a
+paid instance with a persistent disk mounted at `/var/data`, then set:
+
+```bash
+GUN_DATA_DIR=/var/data
+```
+
+Render disks are not available on the free plan. If you stay on free, use it
+for ephemeral demo messages only, not for cross-device account login.
+
+### Docker / VPS
 
 ```bash
 cd relay
 docker build -t amber-relay .
-docker run -p 3000:3000 amber-relay
+docker run -p 3000:3000 \
+  -v amber-relay-data:/data \
+  -e GUN_DATA_DIR=/data \
+  amber-relay
 ```
 
 Set the container port from `PORT` and put TLS in front of it if the app is
 served over HTTPS — a page on `https://` cannot connect to `ws://`.
+
+`/health` reports `dataDir` and `dataDirConfigured` so you can confirm the relay
+is using the mounted path.
 
 ### Things that do *not* work
 
