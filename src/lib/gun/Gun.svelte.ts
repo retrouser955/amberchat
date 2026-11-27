@@ -21,10 +21,18 @@ declare module "gun" {
 	}
 }
 
-export interface GunUserReactive {
+export interface GunProfile {
+	pub: string;
+	alias?: string;
+	displayName?: string;
+	avatar?: string;
+	bio?: string;
+	epub?: string;
+}
+
+export interface GunUserReactive extends GunProfile {
 	alias: string;
 	pub: string;
-	avatar?: string;
 }
 
 export let gunData = $state<{
@@ -61,6 +69,37 @@ export function getUser() {
 	return user;
 }
 
+/** Update the reactive signed-in profile without waiting for a Gun round trip. */
+export function updateGunUser(patch: Partial<Omit<GunUserReactive, "pub">>) {
+	if (!gunData.user) return;
+
+	gunData.user = {
+		...gunData.user,
+		...patch
+	};
+}
+
+/** Read a public profile node (`~<pub>`). Returns undefined if it has not synced. */
+export async function fetchProfile(pub: string): Promise<GunProfile | undefined> {
+	if (!pub) return;
+
+	const instance = createGun();
+	const data = await instance
+		.get<Partial<GunProfile>>(`~${pub}`)
+		.then();
+
+	if (!data) return;
+
+	return {
+		pub,
+		alias: data.alias ?? undefined,
+		displayName: data.displayName ?? undefined,
+		avatar: data.avatar ?? undefined,
+		bio: data.bio ?? undefined,
+		epub: data.epub ?? undefined
+	};
+}
+
 export function createGun() {
 	ensureBrowser();
 
@@ -84,12 +123,16 @@ export function createGun() {
 		gunData.ready = true;
 
 		const alias = await user.get<string>("alias").then();
+		const displayName = await user.get<string>("displayName").then();
 		const avatar = await user.get<string>("avatar").then();
+		const bio = await user.get<string>("bio").then();
 
 		gunData.user = {
 			alias: alias ?? user.is.pub,
 			pub: user.is.pub,
-			avatar
+			displayName: displayName ?? undefined,
+			avatar: avatar ?? undefined,
+			bio: bio ?? undefined
 		}
 	})
 

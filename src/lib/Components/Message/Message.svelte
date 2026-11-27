@@ -3,6 +3,7 @@
 	import Reply from "lucide-svelte/icons/reply";
 	import Pencil from "lucide-svelte/icons/pencil";
 	import GunAvatar from "../GunAvatar/GunAvatar.svelte";
+	import MessageMarkdown from "./MessageMarkdown.svelte";
 	import { onDestroy, onMount } from "svelte";
 	import type { ReplyReference } from "$lib/gun";
 
@@ -82,7 +83,7 @@
 		if (event.pointerType !== "touch" || event.button !== 0) return;
 
 		const target = event.target as HTMLElement;
-		if (target.closest("button,a")) return;
+		if (target.closest("button,a,pre,[role='button']")) return;
 
 		clearLongPress();
 		gestureActive = true;
@@ -216,9 +217,12 @@
 							</span>
 						</button>
 					{/if}
-					<p class="min-w-0 whitespace-pre-wrap break-words text-[15px] leading-[1.375rem] text-ink-soft">
-						{content}{#if editedAt}<span class="ml-1 text-[10px] text-ink-muted">(edited)</span>{/if}
-					</p>
+					<div class="min-w-0 text-[15px] leading-[1.375rem] text-ink-soft">
+						<MessageMarkdown {content} />
+						{#if editedAt}
+							<span class="text-[10px] text-ink-muted">(edited)</span>
+						{/if}
+					</div>
 				</div>
 			</div>
 		{:else}
@@ -251,9 +255,9 @@
 							</span>
 						</button>
 					{/if}
-					<p class="whitespace-pre-wrap break-words text-[15px] leading-[1.375rem] text-ink-soft">
-						{content}
-					</p>
+					<div class="break-words text-[15px] leading-[1.375rem] text-ink-soft">
+						<MessageMarkdown {content} />
+					</div>
 				</div>
 			</div>
 		{/if}

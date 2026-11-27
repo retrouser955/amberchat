@@ -3,7 +3,8 @@
 	import { Button } from "$lib/Components/ui/button";
 	import { acceptFriend, addFriend, createInvite } from "$lib/gun/User/User";
 	import { onMount } from "svelte";
-	import { createGun, getUser } from "$lib/gun/Gun.svelte";
+	import { fetchProfile, getUser } from "$lib/gun/Gun.svelte";
+	import { displayNameOf } from "$lib/profile";
 	import GunAvatar from "$lib/Components/GunAvatar/GunAvatar.svelte";
 	import UserPlus from "lucide-svelte/icons/user-plus";
 	import Copy from "lucide-svelte/icons/copy";
@@ -13,28 +14,25 @@
 
 	let inviteLink = $state<string>("");
 	let frequestPub = $state<string[]>([]);
-	let friendRequests = $state<{ pub: string, alias: string, avatar?: string }[]>([]);
+	let friendRequests = $state<{ pub: string, alias: string, displayName?: string }[]>([]);
 	let errorMessage = $state<string>();
 
 	$effect(() => {
 		if(frequestPub.length === 0) return;
-		const gun = createGun();
 
 		for(const pub of frequestPub) {
 			if(friendRequests.some((request) => request.pub === pub)) continue;
 
 			;(async () => {
 				try {
-					const peer = await gun
-						.get<{ alias?: string; avatar?: string }>(`~${pub}`)
-						.then();
+					const peer = await fetchProfile(pub);
 
 					if(!frequestPub.includes(pub)) return;
 					if(friendRequests.some((request) => request.pub === pub)) return;
 
 					friendRequests.push({
 						alias: peer?.alias ?? pub,
-						avatar: peer?.avatar,
+						displayName: peer?.displayName,
 						pub
 					})
 				} catch (error) {
@@ -175,9 +173,9 @@
 					<div class="space-y-2">
 						{#each friendRequests as req}
 							<div class="flex items-center gap-3 rounded-md bg-panel px-3 py-2.5 transition-colors hover:bg-hover">
-								<GunAvatar pub={req.pub} avatarSource={req.avatar} class="h-9 w-9 shrink-0 rounded-full" />
+								<GunAvatar pub={req.pub} class="h-9 w-9 shrink-0 rounded-full" />
 								<div class="min-w-0 flex-1">
-									<p class="truncate text-sm font-medium text-ink">{req.alias}</p>
+									<p class="truncate text-sm font-medium text-ink">{displayNameOf(req)}</p>
 									<p class="text-[11px] text-ink-muted">Incoming friend request</p>
 								</div>
 								<Button size="sm" onclick={() => acceptRequest(req.pub)}>

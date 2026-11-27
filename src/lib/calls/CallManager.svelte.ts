@@ -12,6 +12,7 @@ export type CallSignalType = "offer" | "answer" | "candidate" | "reject" | "hang
 export interface CallPeer {
 	pub: string;
 	alias: string;
+	displayName?: string;
 	avatar?: string;
 	epub: string;
 }
@@ -70,6 +71,10 @@ export class CallManager {
 	remoteStream = $state<MediaStream>();
 	muted = $state(false);
 	cameraOff = $state(false);
+	hasLocalVideo = $state(false);
+	hasRemoteVideo = $state(false);
+	screenSharing = $state(false);
+	hasVideo = $derived(this.hasLocalVideo || this.hasRemoteVideo);
 	error = $state<string>();
 	startedAt = $state<number>();
 
@@ -78,6 +83,8 @@ export class CallManager {
 	private userPub?: string;
 	private callId?: string;
 	private pc?: RTCPeerConnection;
+	private screenStream?: MediaStream;
+	private cameraTrack?: MediaStreamTrack;
 	private pendingOffer?: RTCSessionDescriptionInit;
 	private pendingCandidates: RTCIceCandidateInit[] = [];
 	private localCandidates: RTCIceCandidateInit[] = [];
@@ -96,6 +103,10 @@ export class CallManager {
 
 	isFriend(pub: string) {
 		return this.friendPubs.includes(pub);
+	}
+
+	get localPreviewStream() {
+		return this.screenSharing ? this.screenStream : this.localStream;
 	}
 
 	clearError() {
@@ -211,6 +222,7 @@ export class CallManager {
 			}
 
 			this.localStream = stream;
+			this.hasLocalVideo = kind === "video";
 
 			for (const track of stream.getTracks()) {
 				pc.addTrack(track, stream);
@@ -250,6 +262,7 @@ export class CallManager {
 			}
 
 			this.localStream = stream;
+			this.hasLocalVideo = this.kind === "video";
 			this.canSendCandidates = false;
 			this.localCandidates = [];
 
@@ -324,6 +337,98 @@ export class CallManager {
 		}
 	}
 
+	/** Turn the camera on in an audio call, or toggle it in a video call. */
+	async toggleVideo() {
+		if (this.screenSharing) {
+			await this.stopScreenShare();
+			return;
+		}
+
+		const videoTracks = this.localStream?.getVideoTracks() ?? [];
+
+		if (videoTracks.length > 0) {
+			this.toggleCamera();
+			return;
+		}
+
+		try {
+			const media = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+			const track = media.getVideoTracks()[0];
+			if (!track) return;
+
+			this.cameraTrack = track;
+			this.localStream?.addTrack(track);
+			this.pc?.addTrack(track, this.localStream ?? media);
+			this.hasLocalVideo = true;
+			this.cameraOff = false;
+
+			await this.renegotiate();
+		} catch (error) {
+			this.error = error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	async startScreenShare() {
+		if (this.screenSharing) return;
+
+		try {
+			const display = await navigator.mediaDevices.getDisplayMedia({
+				video: true,
+				audio: false
+			});
+			const track = display.getVideoTracks()[0];
+			if (!track) return;
+
+			this.screenStream = display;
+			this.screenSharing = true;
+
+			track.onended = () => {
+				void this.stopScreenShare();
+			};
+
+			const sender = this.pc?.getSenders().find((entry) => entry.track?.kind === "video");
+
+			if (sender) {
+				await sender.replaceTrack(track);
+			} else {
+				this.pc?.addTrack(track, display);
+				this.hasLocalVideo = true;
+				await this.renegotiate();
+			}
+		} catch (error) {
+			this.error = error instanceof Error ? error.message : String(error);
+		}
+	}
+
+	async stopScreenShare() {
+		if (!this.screenSharing) return;
+
+		for (const track of this.screenStream?.getTracks() ?? []) track.stop();
+		this.screenStream = undefined;
+		this.screenSharing = false;
+
+		const sender = this.pc?.getSenders().find((entry) => entry.track?.kind === "video");
+		const camera = this.cameraTrack ?? this.localStream?.getVideoTracks()[0];
+
+		if (sender && camera) {
+			await sender.replaceTrack(camera);
+			this.hasLocalVideo = true;
+		} else if (sender) {
+			this.pc?.removeTrack(sender);
+			this.hasLocalVideo = false;
+			await this.renegotiate();
+		}
+	}
+
+	private async renegotiate() {
+		if (!this.pc || this.status !== "active" || !this.callId) return;
+		if (this.pc.signalingState !== "stable") return;
+
+		const offer = await this.pc.createOffer();
+		await this.pc.setLocalDescription(offer);
+		await this.sendSignal("offer", { sdp: this.pc.localDescription ?? undefined });
+	}
+
 	private async verifyFriend(pub: string) {
 		if (!this.gun || !this.userPub) return false;
 
@@ -339,7 +444,9 @@ export class CallManager {
 		if (!this.gun) throw new Error("Not connected to Gun.");
 
 		const data = await this.gun
-			.get<{ alias?: string; avatar?: string; epub?: string }>(`~${pub}`)
+			.get<{ alias?: string; displayName?: string; avatar?: string; epub?: string }>(
+				`~${pub}`
+			)
 			.then();
 
 		if (!data?.epub) {
@@ -349,6 +456,7 @@ export class CallManager {
 		const peer = {
 			pub,
 			alias: data.alias ?? pub,
+			displayName: data.displayName,
 			avatar: data.avatar,
 			epub: data.epub
 		};
@@ -471,6 +579,13 @@ export class CallManager {
 
 		pc.ontrack = (event) => {
 			this.remoteStream = event.streams[0] ?? new MediaStream([event.track]);
+			this.hasRemoteVideo = this.remoteStream.getVideoTracks().length > 0;
+
+			event.track.onended = () => {
+				this.hasRemoteVideo =
+					this.remoteStream?.getVideoTracks().some((track) => track.readyState === "live") ??
+					false;
+			};
 		};
 
 		pc.onicecandidate = (event) => {
@@ -627,6 +742,24 @@ export class CallManager {
 			}
 
 			if (record.type === "offer") {
+				if (
+					this.pc &&
+					this.callId === record.callId &&
+					this.status === "active" &&
+					payload.sdp
+				) {
+					await this.pc.setRemoteDescription(payload.sdp);
+					this.remoteDescriptionSet = true;
+					await this.flushCandidates();
+
+					const answer = await this.pc.createAnswer();
+					await this.pc.setLocalDescription(answer);
+					await this.sendSignal("answer", {
+						sdp: this.pc.localDescription ?? undefined
+					});
+					return;
+				}
+
 				if (this.cancelledCalls.has(record.callId)) {
 					this.cancelledCalls.delete(record.callId);
 					return;
@@ -659,7 +792,16 @@ export class CallManager {
 			}
 
 			if (record.type === "answer") {
-				if (!this.pc || this.direction !== "outgoing" || !payload.sdp) return;
+				if (!this.pc || !payload.sdp) return;
+
+				if (this.status === "active") {
+					await this.pc.setRemoteDescription(payload.sdp);
+					this.remoteDescriptionSet = true;
+					await this.flushCandidates();
+					return;
+				}
+
+				if (this.direction !== "outgoing") return;
 
 				await this.pc.setRemoteDescription(payload.sdp);
 				this.remoteDescriptionSet = true;
@@ -759,6 +901,11 @@ export class CallManager {
 		this.startedAt = undefined;
 		this.muted = false;
 		this.cameraOff = false;
+		this.hasLocalVideo = false;
+		this.hasRemoteVideo = false;
+		this.screenSharing = false;
+		this.screenStream = undefined;
+		this.cameraTrack = undefined;
 	}
 
 	private cleanup() {
@@ -776,8 +923,14 @@ export class CallManager {
 			track.stop();
 		}
 
+		for (const track of this.screenStream?.getTracks() ?? []) {
+			track.stop();
+		}
+
 		this.localStream = undefined;
 		this.remoteStream = undefined;
+		this.screenStream = undefined;
+		this.cameraTrack = undefined;
 		this.pendingOffer = undefined;
 		this.pendingCandidates = [];
 		this.localCandidates = [];
@@ -789,6 +942,9 @@ export class CallManager {
 		this.startedAt = undefined;
 		this.muted = false;
 		this.cameraOff = false;
+		this.hasLocalVideo = false;
+		this.hasRemoteVideo = false;
+		this.screenSharing = false;
 	}
 
 	private clearTimers() {

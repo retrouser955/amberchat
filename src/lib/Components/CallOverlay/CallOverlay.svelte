@@ -6,11 +6,15 @@
 	import MicOff from "lucide-svelte/icons/mic-off";
 	import Video from "lucide-svelte/icons/video";
 	import VideoOff from "lucide-svelte/icons/video-off";
+	import MonitorUp from "lucide-svelte/icons/monitor-up";
+	import MonitorOff from "lucide-svelte/icons/monitor-off";
 	import X from "lucide-svelte/icons/x";
 	import LoaderCircle from "lucide-svelte/icons/loader-circle";
 	import GunAvatar from "../GunAvatar/GunAvatar.svelte";
 	import { Button } from "../ui/button";
 	import { gunData } from "$lib/gun/Gun.svelte";
+	import { canSeeAvatar } from "$lib/gun/Friends.svelte";
+	import { displayNameOf } from "$lib/profile";
 	import { callManager } from "$lib/calls/CallManager.svelte";
 
 	let remoteVideo = $state<HTMLVideoElement>();
@@ -19,7 +23,8 @@
 	let elapsed = $state(0);
 
 	const showCall = $derived(callManager.status !== "idle");
-	const isVideoActive = $derived(callManager.status === "active" && callManager.kind === "video");
+	const isVideoActive = $derived(callManager.status === "active" && callManager.hasRemoteVideo);
+	const videoOn = $derived(callManager.hasLocalVideo && !callManager.cameraOff);
 
 	$effect(() => {
 		if (gunData.user) {
@@ -31,7 +36,7 @@
 
 	$effect(() => {
 		const remote = callManager.remoteStream ?? null;
-		const local = callManager.localStream ?? null;
+		const local = callManager.localPreviewStream ?? null;
 
 		if (remoteVideo) remoteVideo.srcObject = remote;
 		if (remoteAudio) remoteAudio.srcObject = remote;
@@ -83,23 +88,40 @@
 			{/if}
 		</button>
 
-		{#if callManager.kind === "video"}
-			<button
-				type="button"
-				title={callManager.cameraOff ? "Turn camera on" : "Turn camera off"}
-				aria-label={callManager.cameraOff ? "Turn camera on" : "Turn camera off"}
-				class="flex h-12 w-12 items-center justify-center rounded-full transition-colors {callManager.cameraOff
-					? 'bg-white text-rail hover:bg-white/90'
-					: 'bg-white/10 text-ink hover:bg-white/20'}"
-				onclick={() => callManager.toggleCamera()}
-			>
-				{#if callManager.cameraOff}
-					<VideoOff class="h-5 w-5" />
-				{:else}
-					<Video class="h-5 w-5" />
-				{/if}
-			</button>
-		{/if}
+		<button
+			type="button"
+			title={videoOn ? "Turn camera off" : "Turn camera on"}
+			aria-label={videoOn ? "Turn camera off" : "Turn camera on"}
+			class="flex h-12 w-12 items-center justify-center rounded-full transition-colors {videoOn
+				? 'bg-white text-rail hover:bg-white/90'
+				: 'bg-white/10 text-ink hover:bg-white/20'}"
+			onclick={() => void callManager.toggleVideo()}
+		>
+			{#if videoOn}
+				<Video class="h-5 w-5" />
+			{:else}
+				<VideoOff class="h-5 w-5" />
+			{/if}
+		</button>
+
+		<button
+			type="button"
+			title={callManager.screenSharing ? "Stop sharing" : "Share screen"}
+			aria-label={callManager.screenSharing ? "Stop sharing" : "Share screen"}
+			class="flex h-12 w-12 items-center justify-center rounded-full transition-colors {callManager.screenSharing
+				? 'bg-white text-rail hover:bg-white/90'
+				: 'bg-white/10 text-ink hover:bg-white/20'}"
+			onclick={() =>
+				void (callManager.screenSharing
+					? callManager.stopScreenShare()
+					: callManager.startScreenShare())}
+		>
+			{#if callManager.screenSharing}
+				<MonitorOff class="h-5 w-5" />
+			{:else}
+				<MonitorUp class="h-5 w-5" />
+			{/if}
+		</button>
 
 		<button
 			type="button"
@@ -121,11 +143,11 @@
 			<div class="flex items-center gap-3 p-4">
 				<GunAvatar
 					pub={callManager.peer.pub}
-					avatarSource={callManager.peer.avatar}
+					avatarSource={canSeeAvatar(callManager.peer.pub) ? callManager.peer.avatar : undefined}
 					class="h-11 w-11 shrink-0 rounded-full"
 				/>
 				<div class="min-w-0">
-					<p class="truncate text-sm font-semibold text-ink">{callManager.peer.alias}</p>
+					<p class="truncate text-sm font-semibold text-ink">{displayNameOf(callManager.peer)}</p>
 					<p class="text-xs text-ink-muted">Incoming {callManager.kind} call</p>
 				</div>
 			</div>
@@ -147,11 +169,11 @@
 			<div class="flex items-center gap-3 p-4">
 				<GunAvatar
 					pub={callManager.peer.pub}
-					avatarSource={callManager.peer.avatar}
+					avatarSource={canSeeAvatar(callManager.peer.pub) ? callManager.peer.avatar : undefined}
 					class="h-11 w-11 shrink-0 rounded-full"
 				/>
 				<div class="min-w-0 flex-1">
-					<p class="truncate text-sm font-semibold text-ink">{callManager.peer.alias}</p>
+					<p class="truncate text-sm font-semibold text-ink">{displayNameOf(callManager.peer)}</p>
 					<p class="text-xs text-ink-muted">
 						{callManager.status === "outgoing" ? "Calling…" : "Connecting…"}
 					</p>
@@ -180,11 +202,11 @@
 				>
 					<GunAvatar
 						pub={callManager.peer.pub}
-						avatarSource={callManager.peer.avatar}
+						avatarSource={canSeeAvatar(callManager.peer.pub) ? callManager.peer.avatar : undefined}
 						class="h-7 w-7 rounded-full"
 					/>
 					<div>
-						<p class="text-sm font-semibold">{callManager.peer.alias}</p>
+						<p class="text-sm font-semibold">{displayNameOf(callManager.peer)}</p>
 						<p class="text-[11px] text-white/70">{formatDuration(elapsed)}</p>
 					</div>
 				</div>
@@ -206,12 +228,21 @@
 		{:else}
 			<div class="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-rail px-6 text-center">
 				<audio bind:this={remoteAudio} autoplay class="hidden"></audio>
+				{#if callManager.hasLocalVideo && !callManager.cameraOff}
+					<video
+						bind:this={localVideo}
+						autoplay
+						playsinline
+						muted
+						class="absolute bottom-24 right-4 h-40 w-28 rounded-lg border border-white/15 object-cover shadow-xl sm:h-48 sm:w-36"
+					></video>
+				{/if}
 				<GunAvatar
 					pub={callManager.peer.pub}
-					avatarSource={callManager.peer.avatar}
+					avatarSource={canSeeAvatar(callManager.peer.pub) ? callManager.peer.avatar : undefined}
 					class="h-24 w-24 rounded-full"
 				/>
-				<p class="mt-4 text-2xl font-semibold text-ink">{callManager.peer.alias}</p>
+				<p class="mt-4 text-2xl font-semibold text-ink">{displayNameOf(callManager.peer)}</p>
 				<p class="mt-1 text-sm text-ink-muted">{formatDuration(elapsed)}</p>
 
 				<div class="mt-8">

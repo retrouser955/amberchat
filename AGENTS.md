@@ -1,151 +1,193 @@
 # AGENTS.md
 
-## Project overview
+## What this is
 
-AmberChat is a peer-to-peer messaging app built with SvelteKit and GunDB. Messages are end-to-end encrypted with GunDB's SEA API (Diffie-Hellman shared secrets) and persisted/indexed through Gun's graph and a relay server. There is no application backend: `src/` is a client-only SvelteKit app, and Gun peers exchange/relay data.
-
-## Stack
-
-- SvelteKit 2 + Svelte 5 (runes: `$state`, `$props`, `$effect`, `$bindable`)
-- TypeScript (strict), Vite 7, `@sveltejs/adapter-auto` locally and `@sveltejs/adapter-vercel` on Vercel
-- Tailwind CSS v4 (`src/routes/layout.css`) and shadcn-svelte / bits-ui components
-- GunDB (`gun`, `gun/sea`, `gun/lib/{radix,radisk,store,rindexed}`), `gun-avatar`
-- `moment` for relative timestamps, `lucide-svelte` for icons
-- Package manager: **Yarn 4** (`packageManager` in `package.json`; `node_modules` is not installed by default)
+AmberChat is a client-only SvelteKit chat app backed by GunDB. There is no
+application server: `src/` runs in the browser, and a separate standalone Gun
+relay (`relay/`) stores and relays the graph. Direct messages are E2E encrypted
+with SEA ECDH shared secrets. Group chats use an owner-managed epoch key, and
+voice/video calls use WebRTC with Gun signaling (1:1 and group mesh).
 
 ## Commands
 
 ```bash
-yarn install          # install dependencies (Yarn 4 via corepack)
+yarn install          # Yarn 4 via corepack; nodeLinker: node-modules
 yarn dev              # Vite dev server
 yarn build            # production build
 yarn preview          # preview the build
-yarn check            # svelte-kit sync + svelte-check (run after changes)
+yarn check            # svelte-kit sync + svelte-check (only automated check)
 yarn check:watch      # same, in watch mode
 ```
 
-There are no tests, linter, or `format` scripts. Prettier config is `{ "useTabs": true }`; `.vscode/settings.json` enforces tabs and disables indentation detection. Match tabs in all source files.
+- There are no tests, linter, formatter script, or CI. Run `yarn check` after
+  changes. Prettier config is only `{ "useTabs": true }`, and
+  `.vscode/settings.json` forces tabs; use tabs in every source file.
+- `relay/` is a **separate npm project, not a Yarn workspace**:
+  `cd relay && npm install && npm start` serves `http://localhost:3000/gun`.
+  `relay/radata` is gitignored; never commit it.
+- Real messaging requires a relay. Copy `.env.example` to `.env` and set
+  `PUBLIC_GUN_RELAY` (comma-separated peers, default
+  `http://localhost:3000/gun`). Calls optionally use `PUBLIC_TURN_URL`,
+  `PUBLIC_TURN_USERNAME`, `PUBLIC_TURN_CREDENTIAL`.
 
-A Gun relay must be running for real messaging. `src/lib/gun/Gun.svelte.ts` reads `PUBLIC_GUN_RELAY` (`$env/dynamic/public`), a comma-separated peer list, and defaults to `http://localhost:3000/gun`. Copy `.env.example` to `.env` to configure it. The README shows a minimal Express + Gun relay (`app.use(Gun.serve)`, `Gun({ web: httpServer })` on port 3000).
+Deployment: `svelte.config.js` picks `adapter-vercel` when `VERCEL` is set,
+otherwise `adapter-auto`. `vite.config.ts` sets `ssr.noExternal: ['gun']` only
+for the Vercel production build; Gun is CommonJS and externalizing it there
+crashes with `ERR_INTERNAL_ASSERTION`. Do not enable that in dev, where Vite's
+SSR runner has no `module` global. The relay deploys separately (`render.yaml`,
+`relay/fly.toml`, `relay/Dockerfile`); see `relay/README.md`.
 
-Deployment notes:
-- `svelte.config.js` selects `@sveltejs/adapter-vercel` when `VERCEL` is set, and `adapter-auto` otherwise. On Windows, `adapter-vercel` needs Developer Mode for its function symlinks.
-- `vite.config.ts` sets `ssr.noExternal: ['gun']` only for the Vercel production build (`command === 'build'` and `VERCEL` set). Gun is CommonJS; leaving it external makes the Vercel function import it through Node's ESM loader and crash with `ERR_INTERNAL_ASSERTION` (the 500 page). Do not apply this in dev: Vite's SSR module runner has no `module` global and fails with `module is not defined`.
-- The project uses Yarn 4 (`yarn.lock` v8 + `.yarnrc.yml` with `nodeLinker: node-modules`).
-- Set `PUBLIC_GUN_RELAY` in the Vercel project environment, pointing at the separately deployed relay (`.../gun`).
-
-## Layout
+## Layout / entrypoints
 
 ```
-relay/                      # standalone Gun relay (own package.json, deployed separately)
-src/
-  app.html, app.d.ts
-  routes/
-    +layout.svelte            # global shell: Navbar + CallOverlay, initializes Gun
-    +page.svelte              # landing page
-    layout.css                # Tailwind v4 + theme tokens
-    chat/+layout.svelte       # AuthGuard + Sidebar + content split
-    chat/+page.svelte         # empty-state prompt
-    chat/[id]/+page.svelte    # DM conversation for a peer pub key
-    friend-requests/+layout.svelte  # AuthGuard
-    friend-requests/+page.svelte
-  lib/
-    gun/
-      Gun.svelte.ts           # Gun singleton, auth state, user helpers
-      index.ts                # re-exports DMChannel
-      Channel/DMChannel.svelte.ts
-      User/User.ts            # invites, friend requests, accepting friends
-      User/SEA.ts             # empty placeholder
-      Time/Time.ts            # empty placeholder
-    calls/
-      CallManager.svelte.ts   # WebRTC + Gun signaling + friend authorization
-    Components/
-      AuthGuard, CallOverlay, Navbar, Sidebar, Message,
-      MessageActionSheet, GunAvatar, ui/{button,dialog,input,label}
-    utils.ts                  # cn(), shadcn prop helper types
-    assets/
+src/routes/+layout.svelte        root shell: Navbar + CallOverlay + GroupCallOverlay
+src/routes/chat/                 AuthGuard -> Sidebar -> DM pane, keyed by pathname
+src/routes/friend-requests/      AuthGuard + invite/request UI
+src/routes/profile/              avatar upload/resize, display name, bio
+src/routes/groups/               list, create, join, conversation, settings
+src/lib/gun/Gun.svelte.ts        Gun singleton, gunData rune, profiles, auth/logout
+src/lib/gun/Channel/DMChannel.svelte.ts
+src/lib/gun/Group/               group types, crypto, Group.ts, GroupChannel
+src/lib/gun/User/User.ts         invites, friend requests, accept
+src/lib/gun/Friends.svelte.ts    reactive friend set + canSeeAvatar()
+src/lib/calls/CallManager.svelte.ts
+src/lib/calls/GroupCallManager.svelte.ts
+src/lib/Components/              capital C; shadcn primitives under ui/
+relay/index.js                   standalone Gun relay
 ```
 
-Note the capital `Components` directory (shadcn's default `$lib/components` alias in `components.json` does not match the actual casing on disk). On case-sensitive filesystems, import from `$lib/Components/...`, not `$lib/components/...`.
+- `$lib/gun` (`src/lib/gun/index.ts`) re-exports only `DMChannel` and its
+  types; import `Gun.svelte` and `User/User` directly.
+- `components.json` aliases point at `$lib/Components` (capital C). There is no
+  lowercase `components/` directory; use the real casing.
+- `src/lib/gun/User/SEA.ts` and `src/lib/gun/Time/Time.ts` are intentionally
+  empty placeholders, not accidental deletions.
 
-## GunDB / app architecture
+## GunDB / data model
 
-### Core singleton — `src/lib/gun/Gun.svelte.ts`
-
-- `createGun()` lazily creates one `Gun({ peers: [...] })` instance, registers the `"auth"` handler, then calls `gun.user().recall({ sessionStorage: true })` (the order avoids missing a synchronous recall event). It returns the existing instance thereafter.
-- `getUser()` ensures Gun exists and returns the recalled Gun user.
-- `ensureUserLogged(user)` asserts `user.is` and `user._.sea` exist.
-- `gunData` is a rune-backed `$state` object holding `{ user?: { alias, pub, avatar }, ready }`. `ready` flips to `true` after the initial session recall resolves; `AuthGuard` uses it to avoid flashing protected pages or redirecting before recall completes.
-- `logout()` calls `user.leave()`, clears the `recall`/`pair` sessionStorage keys, resets `gunData.user`, and leaves `ready` true so `AuthGuard` redirects.
-- The `"gun"` module is augmented with the missing `IGunUserInstance._.sea` and `IGunChain.then()` types.
-
-All Gun/SEA code is **browser-only** (uses `window`, `sessionStorage`, `navigator.locks`). Call it from `onMount`, event handlers, or `$effect`, never at module scope or during SSR. `ensureBrowser()` uses `typeof window === "undefined"` and throws on the server; protected routes are wrapped in `AuthGuard` (`src/lib/Components/AuthGuard/AuthGuard.svelte`).
-
-### Direct messages — `src/lib/gun/Channel/DMChannel.svelte.ts`
-
-The `DMChannel` class encapsulates one 1:1 conversation:
-
-1. `channelId = SHA-256("amber/dm/v1:" + sharedSecret)`, derived lazily and asynchronously from `SEA.secret(peerEnc, user._.sea)`. This hides the pair of public keys from the public index and message paths. `chat/+layout.svelte` keys the page content by `page.url.pathname`, so switching peers remounts the page and creates a fresh `DMChannel`.
-2. `fetchUserEpub()` reads the peer's `epub` (public encryption key) from `~<pub>`.
-3. `send(content)`:
-   - derives the shared secret with `SEA.secret(peerEnc, user._.sea)`;
-   - encrypts content with that secret (`SEA.encrypt(content, { epriv: secret })`);
-   - stores the encrypted message under the sender's own user space: `user.messages[<opaqueChannelId>][messageId] = { content }`;
-   - encrypts the index envelope `{ sig, from }` with the same secret and writes it to `chats/DMs/<opaqueChannelId>` as `"<messageId>#<sha256>"`. `sig` is `SEA.sign("SIGNED_MESSAGE", user._.sea)`. Do not prefix public souls with `#`: Gun treats those as hash-verified souls and normal puts do not persist/ack.
-4. `listen()` subscribes with `.on()` to a Gun LEX query (last 100 entries, `< "\uffff"`) so new messages arrive live without a reload; `loadHistory()` pages backwards from `lastMessage` with `.once()`. Each encrypted index entry is decrypted, signature-verified with `SEA.verify`, then the actual message is fetched from `~<from>.messages[<opaqueChannelId>][messageId]` and decrypted. A message key is cached only after it is rendered successfully, so a content read that has not synced yet can be retried.
-5. Messages are inserted in timestamp order via binary search (`getSortIndex`/`insertAtSortIndex`); do not re-sort after insertion. `navigator.locks` (`GUNDB_MESSAGE_POP`, `GUNDB_MESSAGE_ARRAY`, `CHAT_FRIENDS_SIDEBAR`) serializes async updates to arrays.
-6. The content record may include an optional `meta` field encrypted with the same channel secret. `meta.replyTo` stores an id/from/alias/preview snapshot; `meta.editOf` marks an append-only edit event. Edit events are not inserted into the visible message list; they update the target only when the edit author matches the target author. Pending edits are applied when the target arrives.
-
-`loadHistory()` is implemented but not yet surfaced in the UI. Keep when extending the chat view. Note that Gun's `.off` method uses `this`; wrap chains in a closure (`() => chain.off()`) instead of extracting `.off` directly. The opaque channel scheme is a breaking data change: messages stored under the old pub-pair channel ID (or the older `#chats` namespace) are not read.
-
-`Sidebar` and `friend-requests` also use `.on()` so friend/friend-request lists update live, and both return a cleanup that calls `chain.off()`.
-
-### Friends / invites — `src/lib/gun/User/User.ts`
-
-- Invites are `amber://request_friend?cert=...&pub=...` URLs built by `createInviteUrl`.
-- `createInvite()` creates (once, cached encrypted under `user.certs.fr`) a SEA certificate for `{ "*": "fr" }` and returns the invite URL.
-- `addFriend(code)` verifies the `amber:` protocol, validates `cert`/`pub`, and writes a friend-request certificate to `~<friendPub>.fr[userPub]` using the inviter's cert.
-- `acceptFriend(friendPub)` writes `Gun.state()` into `~<friendPub>.friends[userPub]` with the request cert, mirrors the timestamp into `user.friends[friendPub]`, then tombstones `user.fr[friendPub]` with `null`.
-
-When changing graph keys (`fr`, `friends`, `messages`, `certs.fr`, `epub`, `chats/DMs/...`, `calls/...`) keep writes and reads in sync across these modules and components, and preserve the certificate/signature flow.
-
-### Voice/video calls — `src/lib/calls/CallManager.svelte.ts`
-
-- `CallManager` is a global singleton instantiated from `CallOverlay` in the root layout. It subscribes to the logged-in user's `friends` graph and, for each friend, to a shared call channel.
-- The call channel ID is `SHA-256("amber/call/v1:" + sharedSecret)`, so the channel path does not reveal either public key. Domain-separating the DM and call hashes prevents correlating the two channel types.
-- Calls are friend-only. `startCall()` verifies the peer is in the caller's `friends` graph, and incoming offers run `verifyFriend(peer.pub)` before ringing. Because only the pair can derive the channel ID, non-friends cannot inject signals.
-- Signaling is a JSON record `{ v, callId, type, payload, ts }` written under `calls/<opaqueChannelId>/<callId>:<messageId>`. `payload` is SEA-encrypted with the ECDH shared secret (`SEA.secret(peer.epub, user._.sea)`) and includes the sender pub inside the encrypted payload so a peer can ignore its own signals.
-- Signal types are `offer`, `answer`, `candidate`, `reject`, and `hangup`. Records are deleted (tombstoned) after the receiving peer processes them; senders leave their own records for the peer to consume.
-- ICE candidates are gated until the offer/answer write completes so they cannot overtake the SDP. Remote candidates are queued until `setRemoteDescription`.
-- Media uses WebRTC with Google STUN by default. `PUBLIC_TURN_URL`, `PUBLIC_TURN_USERNAME`, and `PUBLIC_TURN_CREDENTIAL` add a TURN server for strict NAT/firewall environments.
-- `CallOverlay` handles incoming/outgoing/active UI and must stay mounted globally so calls ring on any route.
+- `createGun()` is lazy: creates one `Gun({ peers })`, registers the `"auth"`
+  handler, then calls `recall({ sessionStorage: true })` (handler first so a
+  synchronous recall is not missed). `gunData` is a `$state` `{ user?, ready }`;
+  `AuthGuard` waits for `ready` before redirecting or rendering.
+- All Gun/SEA code is browser-only. Never touch it at module scope or during
+  SSR; use `onMount`, event handlers, or `$effect`. `ensureBrowser()` throws on
+  the server.
+- Graph keys: `~<pub>.{alias,displayName,bio,avatar,epub,friends,fr,messages,gmessages,groups,certs.fr}`,
+  `chats/DMs/<channelId>`, `chats/groups/<gid>`, `groups/<gid>/...`,
+  `calls/<channelId>`, `calls/groups/<callChannelId>/...`. Changing one requires
+  tracing every read/write and preserving the certificate/signature flow.
+- Profiles: `displayName` overrides `alias` in the UI. Use `displayNameOf()` from
+  `$lib/profile`; use `canSeeAvatar(pub)` from `$lib/gun/Friends.svelte` and omit
+  `avatarSource` for non-friends. `/profile` resizes avatars to a 256px JPEG data
+  URL before writing `avatar`. Avatar hiding is UI-only; the raw value remains
+  public in Gun.
+- DM channel: `channelId = SHA-256("amber/dm/v1:" + SEA.secret(peerEpub, self))`,
+  so public paths do not reveal the pair. Ciphertext is stored in the sender's
+  `messages[channelId][messageId]`; the public index at
+  `chats/DMs/<channelId>` stores an SEA-encrypted `{ sig, from }` under
+  `<messageId>#<sha256>`. The index signature verifies `"SIGNED_MESSAGE"`.
+- `meta` (encrypted with the same secret) carries `replyTo` / `editOf`. Edits
+  are append-only events and are never added to the visible list; they apply
+  only when the editor matches the original author, and pending edits are
+  replayed when the target arrives.
+- Message IDs are `Gun.state()` timestamps. Insert in timestamp order via the
+  existing binary search; do not re-sort. `navigator.locks`
+  (`GUNDB_MESSAGE_POP`, `GUNDB_MESSAGE_ARRAY`, `CHAT_FRIENDS_SIDEBAR`)
+  serializes async array updates.
+- `listen()` uses a LEX `.on()` query (last 100, `< "\uffff"`);
+  `loadHistory()` pages backwards with `.once()` but is not wired into the UI
+  yet.
+- Do not prefix public souls with `#`; Gun treats them as hash-verified souls
+  and normal puts do not ack. `.off` uses `this`: call it on the chain or wrap
+  it (`() => chain.off()`), never extract the method.
+- Friends: invites are `amber://request_friend?cert=...&pub=...`. `createInvite()`
+  caches an encrypted `{ "*": "fr" }` cert in `certs.fr`; `addFriend()` writes a
+  cert to `~friend.fr[self]`; `acceptFriend()` writes
+  `~friend.friends[self]` with the request cert, mirrors the timestamp into
+  `self.friends[friend]`, then tombstones `self.fr[friend]` with `null`.
+- Groups are owner-only. `Group.ts` creates an opaque `gid`, an epoch key,
+  `groups/<gid>/{meta,roster}/<epoch>` snapshots, `keys/<epoch>/<memberTag>`
+  envelopes, and a signed `current` pointer. Message ciphertext lives in the
+  sender's `gmessages/<storeId>`; the encrypted index is `chats/groups/<gid>`.
+  `GroupChannel` mirrors `DMChannel`. Members receive only the epoch they joined
+  at, so there is no history backfill. Removing a member rotates the key; old
+  messages stay readable to the removed member. Use the base64url helpers in
+  `Group/crypto.ts` for path segments (`/` in raw base64 breaks Gun paths).
+- Calls: `callManager` is a module singleton; `CallOverlay` calls `init()` /
+  `destroy()` as `gunData.user` changes, and the overlay must stay mounted
+  globally. Channel ID is `SHA-256("amber/call/v1:" + secret)`. Calls are
+  friend-only (`verifyFriend`). Signals are `{ v: 1, callId, type, payload, ts }`
+  under `calls/<channelId>/<callId>:<id>`, encrypted, and include `sender`;
+  receivers tombstone each record after processing. ICE is gated until the
+  offer/answer write completes; remote candidates queue until
+  `setRemoteDescription`. `toggleVideo()` enables the camera in an audio call and
+  renegotiates; `startScreenShare()`/`stopScreenShare()` swap the video sender
+  track. Active calls must handle renegotiation offers/answers, not only the
+  initial call setup.
+- Group calls: `groupCallManager` is a separate module singleton. The call
+  record is `groups/<gid>/call`; presence and signals live under
+  `calls/groups/<callChannelId>/{participants,signals}`. It uses a full WebRTC
+  mesh (one peer connection per participant) with perfect-negotiation-style
+  glare handling; `GroupCallOverlay` must stay mounted globally. After creating
+  or joining a group, call `groupCallManager.reload()` so incoming calls are
+  subscribed. Keep group calls small; there is no SFU.
 
 ## UI conventions
 
-- Svelte 5 runes only; no Svelte stores. Types are declared inline in `$props()`/`$state()`.
-- Use existing primitives from `$lib/Components/ui/{button,dialog,input,label}` rather than raw shadcn/HTML where one exists. `button` exports `variant`/`size` types, `buttonVariants`, and renders `<a>` when `href` is passed.
-- Use `cn()` from `$lib/utils` to merge Tailwind classes.
-- Use `GunAvatar` for user images (falls back to `gunAvatar({ pub, size })` from `gun-avatar`), and `Message` for chat rows.
-- The app uses a Discord-inspired dark palette defined in `src/routes/layout.css` (`bg-app`, `bg-panel`, `bg-rail`, `bg-elevated`, `bg-hover`, `bg-selected`, `text-ink`, `text-ink-soft`, `text-ink-muted`, `bg-blurple`, `text-positive`). Reuse these tokens instead of raw `neutral-*` classes.
-- The root shell is a `h-dvh` flex column with a 3.5rem (`h-14`) Navbar; pages use `h-full`. The legacy `.h-enough` utility is now `calc(100vh - 3.5rem)`.
-- `Contact` renders a link to `/chat/{pub}` and derives its active state from `page.url.pathname`; follow SvelteKit patterns (e.g. `$app/state` for `page.params`, `$app/navigation` for `goto`) as in existing routes.
-- `Message` supports a `compact` prop for grouped consecutive messages; the chat page sets it when the same author posts within five minutes. Messages with a reply are never compact.
-- Message actions: desktop uses hover Reply/Edit buttons; touch uses a long-press bottom sheet (`MessageActionSheet`) and swipe-right-to-reply. Reply/edit are composed in the chat composer, not inline in the message row.
-- The chat layout is `AuthGuard` → `Sidebar` (240px, collapsing to 64px below `md`) → main conversation pane. Keep new protected pages inside an `AuthGuard`.
-- Prefer `lucide-svelte/icons/<name>` for icons (both `lucide-svelte` and `@lucide/svelte` are installed; use the former to stay consistent).
+- Svelte 5 runes only; no Svelte stores. Declare prop/state types inline.
+- Use `$lib/Components/ui/{button,dialog,input,label}` and `cn()` from
+  `$lib/utils` instead of raw HTML/shadcn.
+- Discord-style dark tokens live in `src/routes/layout.css`: `bg-app`, `bg-panel`,
+  `bg-rail`, `bg-elevated`, `bg-hover`, `bg-selected`, `text-ink`,
+  `text-ink-soft`, `text-ink-muted`, `bg-blurple`, `text-positive`. Do not use
+  raw `neutral-*`.
+- Root shell is `h-dvh` with an `h-14` Navbar; pages fill `h-full`. New protected
+  pages go inside `AuthGuard`.
+- Use `GunAvatar` for user images (`gunAvatar` fallback) and `Message` for chat
+  rows. `Message` handles `compact` grouping (same author, <5 min, no reply),
+  reply/edit, long-press action sheet, and swipe-to-reply. Reply/edit state lives
+  in the composer, not the message row.
+- Display names: always render `displayNameOf(user)`; raw `user.alias` is the
+  fallback. Avatars: pass `avatarSource` only when `canSeeAvatar(pub)` is true
+  (self or friend); otherwise show the deterministic `gunAvatar` identicon.
+- Group pages live under `/groups` with their own `AuthGuard` + `Sidebar`
+  layout. `GroupContact` is the sidebar row. `groups/[id]/settings` is
+  owner-editable; other members see a read-only view.
+- Icons: `lucide-svelte/icons/<name>`. `@lucide/svelte` is also installed; do not
+  mix it in.
 
-## Gotchas and known rough edges
+## Gotchas
 
-- Gun types are incomplete/loose: expect `@ts-expect-error` around gun-avatar calls and Gun acknowledgment errors (`ack.err`), and use `as unknown as T` casts where necessary. Do not silence unrelated type errors.
-- Gun chains are promise-like via `.then()`; always await `.then()` when you need the value or write confirmation.
-- Empty files `src/lib/gun/User/SEA.ts` and `src/lib/gun/Time/Time.ts` are placeholders, not accidental deletions.
-- Timestamps double as Gun message IDs (`Gun.state()`), so message IDs are not arbitrary; ordering depends on them.
-- `Gun` state is a client singleton whose peers come from `PUBLIC_GUN_RELAY` (`$env/dynamic/public`, comma-separated, default `http://localhost:3000/gun`). Do not read `process.env` in shipped client code.
-- The app assumes browser APIs (`navigator.locks`, `navigator.clipboard`, `sessionStorage`) with no fallbacks.
+- Gun types are incomplete: expect `@ts-expect-error` around `gun-avatar` and
+  Gun ack errors, and `as unknown as T` casts at the Gun boundary. Do not silence
+  unrelated type errors.
+- Gun chains are promise-like; always `await chain.then()` when you need a value
+  or write confirmation.
+- Messages are text-only; there is no attachment/upload path. Avatars are the
+  only binary data and are resized client-side before storage.
+- Avatar privacy is UI-only. `~<pub>.avatar` is still readable by anyone who
+  inspects Gun; do not claim it is cryptographically hidden.
+- Group history is not backfilled: a member added at epoch N cannot read older
+  epochs unless someone explicitly gives them those keys. Removal rotates the
+  key but does not revoke old messages.
+- Group calls are full mesh. Do not raise the member cap without an SFU; every
+  participant opens a peer connection to every other participant.
+- The app assumes modern browser APIs (`navigator.locks`, `navigator.clipboard`,
+  `sessionStorage`) with no fallbacks.
+- On Windows, `adapter-vercel` function symlinks need Developer Mode; local
+  builds use `adapter-auto`.
 
 ## Change checklist
 
-1. Make the smallest change consistent with existing structure and tab indentation.
-2. Run `yarn check` and fix any new type errors.
-3. For Gun/graph changes, trace every read and write of the affected key (including `DMChannel`, `User`, `Sidebar`, `Navbar`, `friend-requests`, `chat/[id]`).
-4. Verify messaging manually with a local relay at `localhost:3000` and two browser sessions/users.
+1. Match the surrounding structure and tab indentation; keep changes small.
+2. Run `yarn check` and fix new type errors.
+3. For graph changes, trace all reads/writes of the affected key, including the
+   certificate/signature flow.
+4. Verify DMs with a local relay and two separate browser profiles (not two tabs;
+   Gun shares `sessionStorage` per origin).
+5. For group changes, use three profiles: create, send, edit/reply, add, remove
+   (check the removed member cannot decrypt new messages), reload, and confirm a
+   newly added member sees no prior history.
+6. For call changes, test audio-only -> enable video, screen share start/stop,
+   and a 3-person group call. A hardware mute/denied camera should set an error,
+   not end the call.

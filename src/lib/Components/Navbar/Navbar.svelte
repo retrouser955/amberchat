@@ -10,6 +10,7 @@
 	import { getUser, gunData, logout } from "$lib/gun/Gun.svelte";
 	import { goto } from "$app/navigation";
 	import GunAvatar from "../GunAvatar/GunAvatar.svelte";
+	import { displayNameOf } from "$lib/profile";
 
 	let username = $state<string>("");
 	let password = $state<string>("");
@@ -127,18 +128,24 @@
 				</Dialog.Content>
 			</Dialog.Root>
 		{:else}
-			<div class="flex items-center gap-2 rounded-md py-1 pl-1 pr-1.5 hover:bg-white/5">
-				<GunAvatar
-					pub={gunData.user.pub}
-					avatarSource={gunData.user.avatar}
-					class="h-8 w-8 rounded-full"
-				/>
-				<div class="hidden min-w-0 sm:block">
-					<p class="max-w-36 truncate text-[13px] font-medium leading-tight text-ink">
-						{gunData.user.alias}
-					</p>
-					<p class="text-[10px] leading-tight text-ink-muted">Signed in</p>
-				</div>
+			<div class="flex items-center gap-2 rounded-md py-1 pl-1 pr-1.5">
+				<a
+					href="/profile"
+					title="Edit profile"
+					class="flex min-w-0 items-center gap-2 rounded-md py-1 pl-1 pr-2 transition-colors hover:bg-white/5"
+				>
+					<GunAvatar
+						pub={gunData.user.pub}
+						avatarSource={gunData.user.avatar}
+						class="h-8 w-8 rounded-full"
+					/>
+					<div class="hidden min-w-0 sm:block">
+						<p class="max-w-36 truncate text-[13px] font-medium leading-tight text-ink">
+							{displayNameOf(gunData.user)}
+						</p>
+						<p class="text-[10px] leading-tight text-ink-muted">View profile</p>
+					</div>
+				</a>
 				<button
 					type="button"
 					title="Log out"

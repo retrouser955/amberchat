@@ -1,5 +1,6 @@
 import Gun, { type LEXQuery } from "gun";
-import { createGun, ensureUserLogged, getUser } from "../Gun.svelte";
+import { createGun, ensureUserLogged, fetchProfile, getUser } from "../Gun.svelte";
+import { displayNameOf } from "$lib/profile";
 
 const { SEA } = Gun;
 
@@ -33,6 +34,7 @@ export interface MessageFormatted {
 	content: string; // decrypted
 	author: {
 		alias: string;
+		displayName?: string;
 		pub: string;
 		avatar?: string;
 	};
@@ -218,6 +220,11 @@ export class DMChannel {
 			setTimeout(() => {
 				try {
 					chain.off();
+
+					for (const message of messages) {
+						this.trackLastMessage(message.timestamp);
+					}
+
 					resolve(messages);
 				} catch (err) {
 					reject(err);
@@ -353,13 +360,14 @@ export class DMChannel {
 						? meta.replyTo
 						: undefined;
 
+				const profile = await fetchProfile(jsonData.from);
+
 				const messageFormatted: MessageFormatted = {
 					content,
 					author: {
-						alias:
-							(await gun.get(`~${jsonData.from}`).get("alias").then()) ??
-							jsonData.from,
-						avatar: await gun.get(`~${jsonData.from}`).get("avatar").then(),
+						alias: profile?.alias ?? jsonData.from,
+						displayName: profile?.displayName,
+						avatar: profile?.avatar,
 						pub: jsonData.from,
 					},
 					timestamp: messageId,
@@ -466,7 +474,7 @@ export class DMChannel {
 						replyTo: {
 							id: options.replyTo.timestamp,
 							from: options.replyTo.author.pub,
-							alias: options.replyTo.author.alias,
+							alias: displayNameOf(options.replyTo.author),
 							preview: options.replyTo.content.slice(0, 140),
 						},
 					}

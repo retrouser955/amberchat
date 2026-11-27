@@ -4,7 +4,10 @@
 	import Message from "$lib/Components/Message/Message.svelte";
 	import MessageActionSheet from "$lib/Components/Message/MessageActionSheet.svelte";
 	import { Input } from "$lib/Components/ui/input";
-	import { createGun, gunData } from "$lib/gun/Gun.svelte";
+	import { Button } from "$lib/Components/ui/button";
+	import { fetchProfile, gunData } from "$lib/gun/Gun.svelte";
+	import { canSeeAvatar } from "$lib/gun/Friends.svelte";
+	import { displayNameOf } from "$lib/profile";
 	import { DMChannel, type MessageFormatted, type ReplyReference } from "$lib/gun";
 	import { onMount, tick } from "svelte";
 	import Lock from "lucide-svelte/icons/lock";
@@ -17,10 +20,13 @@
 	import Check from "lucide-svelte/icons/check";
 	import X from "lucide-svelte/icons/x";
 	import { callManager } from "$lib/calls/CallManager.svelte";
+	import { groupCallManager } from "$lib/calls/GroupCallManager.svelte";
 
 	const uid = page.params.id!;
 	const canCall = $derived(callManager.isFriend(uid));
-	const callBusy = $derived(callManager.status !== "idle");
+	const callBusy = $derived(
+		callManager.status !== "idle" || groupCallManager.status !== "idle"
+	);
 
 	let messageContent = $state<string>();
 	let sendError = $state<string>();
@@ -28,8 +34,12 @@
 	let loading = $state(true);
 	let userData = $state<{
 		alias: string;
+		displayName?: string;
 		avatar?: string;
+		bio?: string;
 	}>();
+
+	const peerName = $derived(displayNameOf(userData));
 
 	let replyTarget = $state<MessageFormatted>();
 	let editingMessage = $state<MessageFormatted>();
@@ -174,22 +184,20 @@
 	}
 
 	onMount(() => {
-		const gun = createGun();
-
 		let off: (() => void) | undefined = undefined;
 		let cancelled = false;
 
 		(async () => {
 			try {
-				const data = await gun
-					.get<{ alias?: string; avatar?: string }>(`~${uid}`)
-					.then();
+				const data = await fetchProfile(uid);
 
 				if (!data) throw new Error("User not found");
 
 				userData = {
 					alias: data.alias ?? uid,
+					displayName: data.displayName,
 					avatar: data.avatar,
+					bio: data.bio,
 				};
 
 				await dm.fetchUserEpub();
@@ -220,11 +228,14 @@
 	<header class="flex h-12 shrink-0 items-center gap-2.5 border-b border-black/20 px-4 shadow-[0_1px_0_rgba(0,0,0,0.2)]">
 		<GunAvatar
 			pub={uid}
-			avatarSource={userData?.avatar}
+			avatarSource={canSeeAvatar(uid) ? userData?.avatar : undefined}
 			class="h-6 w-6 shrink-0 rounded-full"
 		/>
-		<p class="min-w-0 truncate text-[15px] font-semibold text-ink">
-			{userData?.alias ?? "Direct message"}
+		<p
+			class="min-w-0 truncate text-[15px] font-semibold text-ink"
+			title={userData?.bio}
+		>
+			{userData ? peerName : "Direct message"}
 		</p>
 		<div class="ml-auto flex items-center gap-1">
 			{#if canCall}
@@ -270,20 +281,23 @@
 			<div class="flex h-full flex-col items-center justify-center px-6 text-center">
 				<GunAvatar
 					pub={uid}
-					avatarSource={userData?.avatar}
+					avatarSource={canSeeAvatar(uid) ? userData?.avatar : undefined}
 					class="mb-4 h-16 w-16 rounded-full"
 				/>
-				<p class="text-xl font-semibold text-ink">{userData?.alias ?? "Unknown user"}</p>
+				<p class="text-xl font-semibold text-ink">{userData ? peerName : "Unknown user"}</p>
+				{#if userData?.bio}
+					<p class="mt-2 max-w-sm text-sm text-ink-soft">{userData.bio}</p>
+				{/if}
 				<p class="mt-1 max-w-sm text-sm text-ink-muted">
-					This is the beginning of your direct message history with {userData?.alias ?? "this user"}.
+					This is the beginning of your direct message history with {userData ? peerName : "this user"}.
 				</p>
 			</div>
 		{:else}
 			{#each dm.messages as message, i (messageKey(message))}
 				<div id={messageElementId({ from: message.author.pub, id: message.timestamp })}>
 					<Message
-						alias={message.author.alias}
-						avatar={message.author.avatar}
+						alias={displayNameOf(message.author)}
+						avatar={canSeeAvatar(message.author.pub) ? message.author.avatar : undefined}
 						content={message.content}
 						timestamp={message.timestamp}
 						pub={message.author.pub}
@@ -302,6 +316,18 @@
 							dm.messages[i - 1].author.pub === message.author.pub &&
 							message.timestamp - dm.messages[i - 1].timestamp < 5 * 60 * 1000}
 					/>
+
+					{#if message.content.startsWith("amber://join_group?")}
+						<div class="px-14 pb-2">
+							<Button
+								size="sm"
+								variant="secondary"
+								href={`/groups/join?link=${encodeURIComponent(message.content)}`}
+							>
+								Join group
+							</Button>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		{/if}
@@ -322,7 +348,7 @@
 				<Reply class="mt-0.5 h-4 w-4 shrink-0 text-blurple" />
 				<div class="min-w-0 flex-1">
 					<p class="truncate text-[11px] font-semibold text-blurple">
-						Replying to {replyTarget.author.alias}
+						Replying to {displayNameOf(replyTarget.author)}
 					</p>
 					<p class="mt-0.5 truncate text-xs text-ink-muted">{replyTarget.content}</p>
 				</div>
@@ -366,9 +392,9 @@
 				placeholder={editingMessage
 					? "Edit message"
 					: replyTarget
-						? `Reply to @${replyTarget.author.alias}`
-						: userData?.alias
-							? `Message @${userData.alias}`
+						? `Reply to ${displayNameOf(replyTarget.author)}`
+						: userData
+							? `Message ${peerName}`
 							: "Message"}
 				aria-label="Message"
 				enterkeyhint="send"
