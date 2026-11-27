@@ -72,6 +72,34 @@ function parseJson<T>(value: unknown): T | undefined {
 	}
 }
 
+function sleep(ms: number) {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function readKeyEnvelopeReady(gid: string, epoch: number, memberPub: string) {
+	for (let attempt = 0; attempt < 12; attempt += 1) {
+		const envelope = await readKeyEnvelope(gid, epoch, memberPub);
+		if (envelope) return envelope;
+		if (attempt < 11) await sleep(400);
+	}
+}
+
+async function readRosterReady(gid: string, epoch: number, key: string) {
+	for (let attempt = 0; attempt < 12; attempt += 1) {
+		const roster = await readRoster(gid, epoch, key);
+		if (roster) return roster;
+		if (attempt < 11) await sleep(400);
+	}
+}
+
+async function readMetaReady(gid: string, epoch: number, key: string) {
+	for (let attempt = 0; attempt < 12; attempt += 1) {
+		const meta = await readMeta(gid, epoch, key);
+		if (meta) return meta;
+		if (attempt < 11) await sleep(400);
+	}
+}
+
 function rosterPayload(roster: GroupRoster) {
 	return JSON.stringify({
 		v: roster.v,
@@ -117,11 +145,38 @@ async function assertFriend(pub: string) {
 	if (!value) throw new Error("You can only add friends to a group.");
 }
 
+async function assertFriendReady(pub: string) {
+	let lastError: unknown;
+
+	for (let attempt = 0; attempt < 8; attempt += 1) {
+		try {
+			await assertFriend(pub);
+			return;
+		} catch (error) {
+			lastError = error;
+			if (attempt < 7) await sleep(400);
+		}
+	}
+
+	throw lastError;
+}
+
 async function memberEpub(pub: string, selfPub: string, selfEpub: string) {
 	if (pub === selfPub) return selfEpub;
 
-	const profile = await fetchProfile(pub);
+	const profile = await fetchProfileReady(pub);
 	return profile?.epub;
+}
+
+export async function fetchProfileReady(pub: string) {
+	let profile = await fetchProfile(pub);
+
+	for (let attempt = 0; !profile?.epub && attempt < 8; attempt += 1) {
+		await sleep(400);
+		profile = await fetchProfile(pub);
+	}
+
+	return profile;
 }
 
 async function writeMeta(
@@ -501,9 +556,9 @@ export async function createGroup(name: string, memberPubs: string[]): Promise<G
 	];
 
 	for (const pub of [...new Set(memberPubs)].filter((entry) => entry !== self)) {
-		await assertFriend(pub);
+		await assertFriendReady(pub);
 
-		const profile = await fetchProfile(pub);
+		const profile = await fetchProfileReady(pub);
 		if (!profile?.epub) {
 			throw new Error("One of the selected friends has not published an encryption key yet.");
 		}
@@ -588,9 +643,9 @@ export async function addMember(gid: string, pub: string): Promise<string> {
 		return inviteLink(gid, user._.sea.pub, backup.currentEpoch);
 	}
 
-	await assertFriend(pub);
+	await assertFriendReady(pub);
 
-	const profile = await fetchProfile(pub);
+	const profile = await fetchProfileReady(pub);
 	if (!profile?.epub) {
 		throw new Error("That friend has not published an encryption key yet.");
 	}
@@ -668,7 +723,9 @@ async function rotateTo(backup: GroupBackup, members: GroupRoster["members"]) {
 
 	for (const member of members) {
 		const epub = await memberEpub(member.pub, self, user._.sea.epub);
-		if (!epub) continue;
+		if (!epub) {
+			throw new Error("Could not fetch a member's encryption key. Try again.");
+		}
 		await writeKeyEnvelope(backup.gid, newEpoch, member.pub, epub, newKey);
 	}
 
@@ -793,13 +850,27 @@ export async function joinGroup(invite: string): Promise<GroupBackup> {
 		throw new Error("The group invite is incomplete.");
 	}
 
-	await assertFriend(from);
+	try {
+		await assertFriendReady(from);
+	} catch {
+		throw new Error("You must be friends with the group owner before joining.");
+	}
 
-	const fromProfile = await fetchProfile(from);
+	const fromProfile = await fetchProfileReady(from);
 	if (!fromProfile?.epub) throw new Error("The inviter's encryption key is unavailable.");
 
-	const envelope = await readKeyEnvelope(gid, epochParam, user._.sea.pub);
-	if (!envelope) throw new Error("Your invite is not ready yet. Ask the owner to invite you again.");
+	const envelope = await readKeyEnvelopeReady(gid, epochParam, user._.sea.pub);
+	if (!envelope) {
+		console.warn("[group] invite key envelope missing", {
+			gid,
+			epoch: epochParam,
+			from,
+			member: user._.sea.pub
+		});
+		throw new Error(
+			"The group invite has not reached this device yet. Check that both users use the same relay, wait a moment, then try again."
+		);
+	}
 	if (envelope.from !== from) {
 		throw new Error("The invite link does not match the group owner.");
 	}
@@ -809,11 +880,23 @@ export async function joinGroup(invite: string): Promise<GroupBackup> {
 
 	let epoch = epochParam;
 	let epochKey = key;
-	let roster = await readRoster(gid, epoch, epochKey);
-	let meta = await readMeta(gid, epoch, epochKey);
+	let [roster, meta] = await Promise.all([
+		readRosterReady(gid, epoch, epochKey),
+		readMetaReady(gid, epoch, epochKey)
+	]);
 
 	if (!roster || !meta) {
-		throw new Error("The group data has not synced yet. Try again in a moment.");
+		console.warn("[group] roster/meta missing after invite", {
+			gid,
+			epoch,
+			from,
+			member: user._.sea.pub,
+			roster: !!roster,
+			meta: !!meta
+		});
+		throw new Error(
+			"The group data has not synced yet. Check that both users use the same relay, wait a moment, then try again."
+		);
 	}
 
 	if (!roster.members.some((member) => member.pub === user._.sea.pub)) {
@@ -831,27 +914,31 @@ export async function joinGroup(invite: string): Promise<GroupBackup> {
 
 	if (trustedCurrent && trustedCurrent.epoch !== epoch) {
 		const currentEpoch = trustedCurrent.epoch;
-		const nextEnvelope = await readKeyEnvelope(gid, currentEpoch, user._.sea.pub);
+		const nextEnvelope = await readKeyEnvelopeReady(gid, currentEpoch, user._.sea.pub);
 		if (!nextEnvelope) {
 			throw new Error(
-				"The current group key has not synced yet. Try again in a moment."
+				"The current group key has not synced yet. Check that both users use the same relay, wait a moment, then try again."
 			);
 		}
 		if (nextEnvelope.from !== trustedCurrent.updatedBy) {
 			throw new Error("The current group key has an invalid owner signature.");
 		}
 
-		const nextFrom = await fetchProfile(nextEnvelope.from);
+		const nextFrom = await fetchProfileReady(nextEnvelope.from);
 		if (!nextFrom?.epub) throw new Error("The group owner's encryption key is unavailable.");
 
 		const nextKey = await unwrapKeyFrom(nextFrom.epub, user._.sea, nextEnvelope.wrapped);
 		if (!nextKey) throw new Error("Could not unlock the current group key.");
 
-		const nextRoster = await readRoster(gid, currentEpoch, nextKey);
-		const nextMeta = await readMeta(gid, currentEpoch, nextKey);
+		const [nextRoster, nextMeta] = await Promise.all([
+			readRosterReady(gid, currentEpoch, nextKey),
+			readMetaReady(gid, currentEpoch, nextKey)
+		]);
 
 		if (!nextRoster || !nextMeta) {
-			throw new Error("The current group data has not synced yet.");
+			throw new Error(
+				"The current group data has not synced yet. Check that both users use the same relay, wait a moment, then try again."
+			);
 		}
 
 		if (!nextRoster.members.some((member) => member.pub === user._.sea.pub)) {

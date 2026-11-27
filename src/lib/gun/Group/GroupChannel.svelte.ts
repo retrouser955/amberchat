@@ -3,6 +3,7 @@ import { createGun, ensureUserLogged, fetchProfile, getUser } from "../Gun.svelt
 import { displayNameOf } from "$lib/profile";
 import {
 	addMember as addGroupMember,
+	fetchProfileReady,
 	groupStoreId,
 	leaveGroup,
 	loadGroupBackup,
@@ -44,6 +45,7 @@ export class GroupChannel {
 	private currentMessagesCache = new Set<string>();
 	private pendingMessageKeys = new Set<string>();
 	private pendingEdits = new Map<string, { content: string; editedAt: number }>();
+	private snapshotRetries = 0;
 	private currentOff?: () => void;
 	private messageOff?: () => void;
 	private container?: HTMLDivElement;
@@ -102,6 +104,7 @@ export class GroupChannel {
 		ensureUserLogged(user);
 
 		if (current.epoch !== this.currentEpoch) {
+			this.snapshotRetries = 0;
 			let envelope = await readKeyEnvelope(this.gid, current.epoch, user._.sea.pub);
 
 			// The current pointer can arrive before the key envelope has synced.
@@ -118,7 +121,7 @@ export class GroupChannel {
 
 			if (envelope.from !== current.updatedBy) return;
 
-			const sender = await fetchProfile(envelope.from);
+			const sender = await fetchProfileReady(envelope.from);
 			if (!sender?.epub) return;
 
 			const key = await unwrapKeyFrom(sender.epub, user._.sea, envelope.wrapped);
@@ -135,8 +138,27 @@ export class GroupChannel {
 		const key = this.keys.get(current.epoch);
 		if (!key) return;
 
-		const roster = await readRoster(this.gid, current.epoch, key);
-		const meta = await readMeta(this.gid, current.epoch, key);
+		let roster = await readRoster(this.gid, current.epoch, key);
+		let meta = await readMeta(this.gid, current.epoch, key);
+
+		for (let attempt = 0; (!roster || !meta) && attempt < 2; attempt += 1) {
+			await new Promise((resolve) => setTimeout(resolve, 400));
+			roster ??= await readRoster(this.gid, current.epoch, key);
+			meta ??= await readMeta(this.gid, current.epoch, key);
+		}
+
+		if (!roster || !meta) {
+			if (this.snapshotRetries < 3) {
+				this.snapshotRetries += 1;
+				setTimeout(() => {
+					void this.refreshMembership().catch(() => {
+						// Bounded retries; a reload will pick up anything still missing.
+					});
+				}, 800);
+			}
+		} else {
+			this.snapshotRetries = 0;
+		}
 
 		if (roster) {
 			this.roster = roster;
